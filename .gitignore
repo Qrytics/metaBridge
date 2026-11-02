@@ -8,3 +8,6 @@ build/
 .DS_Store
 *.log
 .env
+# Personal runbooks — never commit:
+demoSetup.md
+showcaseScript.md
