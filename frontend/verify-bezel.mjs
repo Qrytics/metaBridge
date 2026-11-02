@@ -70,6 +70,21 @@ const px1 = await page.evaluate(() => window.__metaBridge.playerX);
 console.log('player', px0, '->', px1);
 if (!(px1 > px0)) throw new Error('player did not move with D key');
 
+// DESKTOP PROJECTION: sky replaced by the OS wallpapers.
+const pxSample = () => page.evaluate(() => {
+  const c = document.getElementById('cv-win');
+  const d = c.getContext('2d').getImageData(30, 550, 1, 1).data;
+  return d[0] + d[1] + d[2];
+});
+const beforeProj = await pxSample();
+await page.locator('#btn-project').click();
+await page.waitForFunction(() => window.__metaBridge.projecting === true);
+await page.waitForTimeout(400);
+const afterProj = await pxSample();
+console.log('projection pixel', beforeProj, '->', afterProj);
+if (!(afterProj > beforeProj + 30)) throw new Error('desktop wallpaper did not show through');
+// Projection stays ON into span: world floats on both desktops.
+
 // SPAN mode: one 1920px world 1:1 across both screens.
 await page.locator('#btn-span').click();
 await page.waitForFunction(() => window.__metaBridge.mode === 'span');

@@ -77,6 +77,12 @@ Sleek hardware-KVM + Neural Bezel HUD: `border-radius: 0` everywhere, square cor
   rip, and reverse-tunnel logging route into the span world; title-bar drag
   and voice glides are window-mode only (they auto-exit SPAN first).
   `bezel.spanCamX` / `spanGlobalToWorld` (mirrored py/js) own the math.
+- **Desktop projection (`[PROJECT ON DESKTOP]`):** `renderGame(..., {sky:false})`
+  skips the sky band/sun so tiles/player/entities float over the OS desktop:
+  `frontend/src/desktop.js` paints per-side procedural wallpapers (win blue,
+  mac graphite) on each viewport canvas, and the window/span buffers go
+  transparent where the sky was. Works in window and SPAN modes; file icons
+  (HTML layer) stay on top like real desktop icons.
 - **Direct title-bar drag (primary; `WIN_X` slider is debug readout only).**
   Window lives in global desktop coords: left viewport covers `[0, W_LEFT)`,
   right covers `[W_LEFT, W_LEFT + W_RIGHT)`. Mousedown hit-tests the 28px

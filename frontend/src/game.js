@@ -174,15 +174,18 @@ export function skyColor(dayT) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-export function renderGame(ctx, g, camX = 0, viewW = WORLD_W, yOff = 0) {
-  ctx.fillStyle = skyColor(g.dayT);
-  ctx.fillRect(0, 0, viewW, WORLD_H);
-  // Sun / moon arc
-  const a = g.dayT * Math.PI * 2 - Math.PI / 2;
-  const sx = viewW / 2 + (viewW / 2 - 20) * Math.cos(a);
-  const sy = WORLD_H - 30 + (WORLD_H - 60) * Math.sin(a);
-  ctx.fillStyle = '#ffd94d';
-  ctx.fillRect(Math.round(sx) - 7, Math.round(sy) - 7, 14, 14);
+export function renderGame(ctx, g, camX = 0, viewW = WORLD_W, yOff = 0, opts = {}) {
+  const sky = opts.sky !== false;
+  if (sky) {
+    ctx.fillStyle = skyColor(g.dayT);
+    ctx.fillRect(0, 0, viewW, WORLD_H);
+    // Sun / moon arc
+    const a = g.dayT * Math.PI * 2 - Math.PI / 2;
+    const sx = viewW / 2 + (viewW / 2 - 20) * Math.cos(a);
+    const sy = WORLD_H - 30 + (WORLD_H - 60) * Math.sin(a);
+    ctx.fillStyle = '#ffd94d';
+    ctx.fillRect(Math.round(sx) - 7, Math.round(sy) - 7, 14, 14);
+  }
   // Tiles (culled to the camera view)
   const c0 = Math.max(0, Math.floor(camX / TILE) - 1);
   const c1 = Math.min(g.cols - 1, Math.ceil((camX + viewW) / TILE) + 1);

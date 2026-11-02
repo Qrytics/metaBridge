@@ -1,6 +1,7 @@
 import { cursorOwner, dragHandoff, SPAN_W, SPAN_WORLD_COLS, spanCamX, spanGlobalToWorld, springStep, straddleView, viewportToFrame } from './bezel.js';
 import { createGame, hitSlime, mineAt, placeAt, renderGame, skyColor, stepGame, tileName, WORLD_H, WORLD_W } from './game.js';
 import { decodeB64, restyleAsset, samRip, transferFile, voiceCommand, voiceCommandRaw } from './membrane.js';
+import { paintWallpaper } from './desktop.js';
 
 // --- Global desktop geometry (canvas px = global units) ----------------------
 const W_LEFT = 960;
@@ -61,6 +62,7 @@ window.__metaBridge = {
   get winX() { return Math.round(winX); },
   get winY() { return Math.round(winY); },
   get mode() { return mode; },
+  get projecting() { return projecting; },
   get playerX() { return Math.round((mode === 'span' ? spanGame : game).player.x); },
   get straddle() { return mode === 'span' ? 1920 : straddleView(winX, winY, WIN_W, WIN_H, W_LEFT).straddleOffsetPx; },
   get owner() { return owner; },
@@ -416,6 +418,18 @@ function setMode(next) {
     : 'window mode: floating game window is back');
 }
 btnSpan.onclick = () => setMode(mode === 'span' ? 'window' : 'span');
+
+// --- Desktop projection: sky replaced by the OS desktop wallpaper -----------
+let projecting = false;
+const btnProject = document.getElementById('btn-project');
+function setProjecting(on) {
+  projecting = on;
+  btnProject.textContent = on ? 'PROJECTION: ON (DESKTOP)' : 'PROJECT ON DESKTOP';
+  btnProject.classList.toggle('armed', on);
+  log(on ? 'projection ON: game sky replaced by the computer desktops'
+    : 'projection off: game sky restored');
+}
+btnProject.onclick = () => setProjecting(!projecting);
 async function samRipAt(g, srcCanvas, wx, wy, gx, gy, macSide) {
   const [fx, fy] = viewportToFrame(wx, wy, 0, 0, 1);
   const prompt = pickPrompt(g, wx, wy);
@@ -649,8 +663,11 @@ dragSlider.addEventListener('input', () => { winX = Number(dragSlider.value); })
 mountFiles();
 
 function drawWindowChrome() {
-  winCtx.fillStyle = '#0b0e13';
-  winCtx.fillRect(0, 0, WIN_W, WIN_H);
+  if (projecting) winCtx.clearRect(0, 0, WIN_W, WIN_H);
+  else {
+    winCtx.fillStyle = '#0b0e13';
+    winCtx.fillRect(0, 0, WIN_W, WIN_H);
+  }
   // Title bar
   winCtx.fillStyle = dragging ? '#17351f' : '#141a24';
   winCtx.fillRect(0, 0, WIN_W, TITLE_H);
@@ -666,7 +683,8 @@ function drawWindowChrome() {
     winCtx.font = '10px monospace';
     winCtx.fillText('LIVE_AGENT_STREAM', 8, TITLE_H + 16);
   } else {
-    renderGame(worldCtx, game);
+    if (projecting) worldCtx.clearRect(0, 0, WORLD_W, WORLD_H);
+    renderGame(worldCtx, game, 0, WORLD_W, 0, projecting ? { sky: false } : undefined);
     winCtx.drawImage(worldCanvas, 0, TITLE_H);
     if (source === 'agent' && !agentBitmap) {
       winCtx.fillStyle = 'rgba(5,7,10,0.7)';
@@ -681,18 +699,23 @@ function drawWindowChrome() {
 
 function drawSpanFrame() {
   // Full-bleed 1:1 world across both canvases, bezel splits the image.
-  spanCtx.fillStyle = skyColor(spanGame.dayT);
-  spanCtx.fillRect(0, 0, SPAN_W, 600);
-  renderGame(spanCtx, spanGame, 0, SPAN_W, SPAN_YOFF);
+  if (projecting) spanCtx.clearRect(0, 0, SPAN_W, 600);
+  else {
+    spanCtx.fillStyle = skyColor(spanGame.dayT);
+    spanCtx.fillRect(0, 0, SPAN_W, 600);
+  }
+  renderGame(spanCtx, spanGame, 0, SPAN_W, SPAN_YOFF, projecting ? { sky: false } : undefined);
   spanCtx.fillStyle = 'rgba(5,7,10,0.85)';
   spanCtx.fillRect(8, 8, 348, 20);
   spanCtx.fillStyle = '#56d678';
   spanCtx.font = '11px monospace';
   spanCtx.fillText('TERRARIA.EXE // SPAN 1920px 1:1 // WIN + MAC', 14, 22);
   drawRipContours();
-  ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
+  if (projecting) paintWallpaper(ctxWin, cvWin.width, cvWin.height, 'win');
+  else ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
   ctxWin.drawImage(spanCanvas, 0, 0, W_LEFT, 600, 0, 0, W_LEFT, 600);
-  ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
+  if (projecting) paintWallpaper(ctxMac, cvMac.width, cvMac.height, 'mac');
+  else ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
   ctxMac.drawImage(spanCanvas, W_LEFT, 0, W_RIGHT, 600, 0, 0, W_RIGHT, 600);
   document.getElementById('m-straddle').textContent = '1920';
   document.getElementById('win-geom').textContent = 'SPAN left 960px live';
@@ -742,7 +765,8 @@ function frame() {
     ? `mac_win_x=${v.macWinX} right_vis=${v.rightVisibleW}` : 'no straddle';
 
   // LEFT: clip global [0, W_LEFT). RIGHT: overflow from global W_LEFT.
-  ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
+  if (projecting) paintWallpaper(ctxWin, cvWin.width, cvWin.height, 'win');
+  else ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
   ctxWin.save();
   ctxWin.beginPath();
   // Left canvas local x == global x: visible slice starts at winX.
@@ -751,7 +775,8 @@ function frame() {
   ctxWin.drawImage(winCanvas, Math.round(winX), Math.round(winY));
   ctxWin.restore();
 
-  ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
+  if (projecting) paintWallpaper(ctxMac, cvMac.width, cvMac.height, 'mac');
+  else ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
   if (simDual && v.straddling) {
     ctxMac.save();
     ctxMac.beginPath();
