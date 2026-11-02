@@ -80,3 +80,46 @@ def _to_jpeg(img, quality: int = 75) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+def publish_loop(
+    url: str = "http://localhost:8000/viewport/frame",
+    region: dict | None = None,
+    fps: float = 30.0,
+    duration: float | None = None,
+) -> int:
+    """Stream JPEG frames to the bridge (stdlib HTTP, no extra deps).
+
+    Used on the Windows host node for LIVE_AGENT_STREAM. Returns frames sent.
+    """
+    import time as _time
+    import urllib.request
+
+    period = 1.0 / max(1.0, fps)
+    sent, start = 0, _time.time()
+    while True:
+        frame = capture_window_once(region)
+        req = urllib.request.Request(
+            url, data=frame, headers={"Content-Type": "image/jpeg"}, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                res.read()
+        except Exception:
+            pass  # bridge unreachable: keep capturing locally
+        sent += 1
+        if duration is not None and _time.time() - start >= duration:
+            break
+        _time.sleep(max(0.0, period - (_time.time() - start - sent * period) % period))
+    return sent
+
+
+if __name__ == "__main__":  # python -m agent.capture [--url ...] [--fps 30]
+    import argparse
+
+    _p = argparse.ArgumentParser()
+    _p.add_argument("--url", default="http://localhost:8000/viewport/frame")
+    _p.add_argument("--fps", type=float, default=30.0)
+    _a = _p.parse_args()
+    print(f"publishing to {_a.url} ...")
+    publish_loop(url=_a.url, fps=_a.fps)

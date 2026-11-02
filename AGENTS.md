@@ -67,7 +67,49 @@ Sleek hardware-KVM + Neural Bezel HUD: `border-radius: 0` everywhere, square cor
 - Tests: `pytest backend/tests/` (bezel math `mac_win_x = win_x - W_left`, membrane transpile, input mapping) + `vitest` (`frontend/tests/bezel.test.js`) + clean `vite build`.
 - Run: `python -m pytest backend/tests -q` · `cd frontend && npm test -- --run && npm run build`.
 
-## 7. Agent working agreements
+## 7. Stage 2 — live streaming, direct drag, playable sandbox, membrane DnD
+
+- **Direct title-bar drag (primary; `WIN_X` slider is debug readout only).**
+  Window lives in global desktop coords: left viewport covers `[0, W_LEFT)`,
+  right covers `[W_LEFT, W_LEFT + W_RIGHT)`. Mousedown hit-tests the 28px
+  title bar (`TERRARIA.EXE [PID 4812] // 60 FPS STREAM`) in either canvas;
+  mousemove converts to global x; crossing `x >= W_left` hands active drag
+  state + `CURSOR_OWNER WIN -> MAC` so one uninterrupted drag pulls the live
+  window Windows -> Mac and back. Slider mirrors `winX` (read-only sync).
+- **Sources (KVM bar select):** `LIVE_AGENT_STREAM` = binary JPEG/WebP frames
+  from `agent/capture.py` broadcast over `WS /ws/viewport` (publisher: WS
+  binary send or `POST /viewport/frame`; viewers: all other subscribers).
+  `PLAYABLE_TERRARIA_SANDBOX` = `frontend/src/game.js` 60fps 2D pixel-art
+  sandbox (A/D move, Space/W jump, left-click mine, right-click place,
+  day/night cycle, inventory bar, King Slime + Eye of Cthulhu bosses). One
+  shared state object renders both viewports: left clips `[0, W_LEFT)`, right
+  draws overflow at `mac_win_x` — pixel-for-pixel, zero tearing.
+- **Reverse input:** A/D/W/S/Space + clicks in either viewport route into the
+  shared game state (MAC-side inputs logged as
+  `MAC -> WIN INPUT TUNNEL: KEY_SPACE, CLICK (x,y)`). Playable at 100% WIN,
+  50/50 straddle, or 100% MAC.
+- **Membrane DnD:** desktop file icons (WIN: `deploy_server.ps1`,
+  `win_firewall_rules.bat`, `terraria_world.wld`; MAC: `setup_mac_daemon.sh`).
+  Dragging a WIN file past the bezel flashes it amber, calls
+  `POST /membrane/transfer-file`, runs deterministic `validate_shell` +
+  `muse-wonder-1.0` critic loop (`MAX_CRITIC_RETRIES = 3`), drops the `.sh`
+  icon on the MAC desktop, opens the Code Diff & Critic Inspector modal.
+  `[SAM 3.1 RIP MODE]` toggle / Alt+Click in-game calls
+  `POST /membrane/sam-rip`, draws neon polygon contour, mints a draggable
+  sprite card (draggable across bezel) with `[MUSE IMAGE HD RESTYLE]`
+  (`POST /membrane/restyle-asset`). `[VOICE KVM MIC]` + quick commands call
+  `POST /membrane/voice-command`; actions animate `winX` via closed-form
+  damped spring (`springStep` in `frontend/src/bezel.js`, frontend-only).
+- **New/tested helpers:** `bezel.drag_handoff` (py) / `dragHandoff` (js),
+  `bezel.viewport_to_frame` (py) / `viewportToFrame` (js) for SAM click
+  mapping, `membrane.validate_shell` + `membrane.critic_verify`,
+  `POST /viewport/frame` publisher endpoint, `agent/capture.py::publish_loop`.
+- **Verification:** `pytest backend/tests`, `vitest`, clean `vite build`,
+  headless Playwright Chromium drags the title bar across the bezel and
+  asserts `STRADDLE_OFFSET_PX` updates, both canvases non-blank, zero console
+  errors.
+
+## 8. Agent working agreements
 
 - Keep bezel math in sync across `backend/bezel.py` ↔ `frontend/src/bezel.js`; change both + both test files together.
 - Membrane routers stay thin; model calls isolated in `backend/membrane.py` provider functions for easy mocking.

@@ -90,3 +90,41 @@ def mac_to_host_game_coords(
     gx = max(0, min(mac_cursor_x - mac_win_x, win_w - 1))
     gy = max(0, min(mac_cursor_y - mac_win_y, win_h - 1))
     return (gx, gy)
+
+
+def drag_handoff(
+    cx: int,
+    cy: int,  # noqa: ARG001 - kept for symmetric call shape with input packets
+    dragging: bool,
+    w_left: int,
+    threshold: int = EDGE_THRESHOLD_PX,
+) -> dict:
+    """Cross-bezel drag state: owner flips at the edge, drag survives it.
+
+    A single uninterrupted mouse drag pulls the live window from Windows
+    straight onto the Mac desktop: `dragging` stays True across the handoff.
+    """
+    owner = cursor_owner(cx, w_left, threshold)
+    return {
+        "owner": owner,
+        "dragging": dragging,
+        "crossed": bool(dragging and owner == CURSOR_OWNER_MAC),
+    }
+
+
+def viewport_to_frame(
+    click_x: float,
+    click_y: float,
+    view_origin_x: float,
+    view_origin_y: float,
+    scale: float = 1.0,
+) -> tuple[float, float]:
+    """Map a viewport click to shared-frame coordinates (SAM rip input).
+
+    view_origin_* is the viewport's top-left corner in frame space
+    (0,0 for the left viewport; (mac_win_x, mac_win_y) for the right).
+    """
+    return (
+        (click_x - view_origin_x) * scale,
+        (click_y - view_origin_y) * scale,
+    )

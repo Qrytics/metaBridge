@@ -42,3 +42,20 @@ export function macToHostGameCoords(macX, macY, macWinX, macWinY, winW, winH) {
     Math.max(0, Math.min(macY - macWinY, winH - 1)),
   ];
 }
+
+export function dragHandoff(cx, wLeft, dragging, threshold = EDGE_THRESHOLD_PX) {
+  const owner = cursorOwner(cx, wLeft, threshold);
+  return { owner, dragging, crossed: Boolean(dragging && owner === 'MAC') };
+}
+
+export function viewportToFrame(clickX, clickY, originX, originY, scale = 1) {
+  return [(clickX - originX) * scale, (clickY - originY) * scale];
+}
+
+export function springStep(x, v, target, k = 90, d = 14, dt = 1 / 60) {
+  const F = -k * (x - target) - d * v;
+  v += F * dt;
+  x += v * dt;
+  if (Math.abs(x - target) < 0.5 && Math.abs(v) < 0.5) { x = target; v = 0; }
+  return [x, v];
+}

@@ -109,30 +109,158 @@ def ps1_to_sh(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def validate_shell(text: str, flavor: str = "sh") -> list[str]:
+    """Deterministic validator used before/after the Wonder critic pass."""
+    issues: list[str] = []
+    lines = text.splitlines()
+    if flavor == "sh":
+        if not lines or not lines[0].startswith("#!"):
+            issues.append("missing-shebang")
+        for i, ln in enumerate(lines, 1):
+            s = ln.strip()
+            if s.startswith("Write-Output "):
+                issues.append(f"line-{i}:untranslated-Write-Output")
+            if "$env:" in s:
+                issues.append(f"line-{i}:untranslated-$env")
+        if text.count('"') % 2:
+            issues.append("unbalanced-double-quotes")
+        if text.count("`") % 2:
+            issues.append("unbalanced-backticks")
+    elif flavor == "ps1":
+        for i, ln in enumerate(lines, 1):
+            s = ln.strip()
+            if s.startswith("#!/"):
+                issues.append(f"line-{i}:shebang-in-ps1")
+            if s.startswith("echo "):
+                issues.append(f"line-{i}:untranslated-echo")
+            if s.startswith("export "):
+                issues.append(f"line-{i}:untranslated-export")
+        if text.count('"') % 2:
+            issues.append("unbalanced-double-quotes")
+    else:
+        issues.append(f"unknown-flavor:{flavor}")
+    return issues
+
+
+def _auto_fix(text: str, flavor: str) -> str:
+    """One deterministic critic-fix pass (dev stand-in for muse-wonder-1.0)."""
+    lines = text.splitlines()
+    if flavor == "sh":
+        if not lines or not lines[0].startswith("#!"):
+            lines = ["#!/bin/sh"] + lines
+        lines = [
+            ln.replace("Write-Output ", "echo ") if ln.strip().startswith("Write-Output ") else ln
+            for ln in lines
+        ]
+        fixed = []
+        for ln in lines:
+            if "$env:" in ln:
+                s = ln.strip()
+                if s.startswith("$env:") and "=" in s:
+                    k, v = s[len("$env:"):].split("=", 1)
+                    fixed.append(f"export {k.strip()}={v.strip()}")
+                    continue
+            fixed.append(ln)
+        return "\n".join(fixed) + "\n"
+    if flavor == "ps1":
+        fixed = []
+        for ln in lines:
+            s = ln.strip()
+            if s.startswith("#!/"):
+                continue
+            if s.startswith("echo "):
+                fixed.append("Write-Output " + s[5:])
+                continue
+            if s.startswith("export ") and "=" in s:
+                k, v = s[len("export "):].split("=", 1)
+                fixed.append(f"$env:{k.strip()} = {v.strip()}")
+                continue
+            fixed.append(ln)
+        return "\n".join(fixed) + "\n"
+    return text
+
+
+def critic_verify(filename: str, draft: str, transform: str) -> dict:
+    """Validator + Wonder critic loop (dev: deterministic auto-fix passes).
+
+    Returns the verified script plus `ok`, `retries` (<= MAX_CRITIC_RETRIES)
+    and human-readable `notes` for the Diff & Critic Inspector modal.
+    """
+    flavor = "sh" if transform in ("ps1-to-sh", "bat-to-sh") else "ps1" if transform in (
+        "sh-to-ps1",
+        "sh-to-bat",
+    ) else None
+    target = filename
+    if transform in ("ps1-to-sh", "bat-to-sh"):
+        target = filename.rsplit(".", 1)[0] + ".sh"
+    elif transform in ("sh-to-ps1", "sh-to-bat"):
+        target = filename.rsplit(".", 1)[0] + (".ps1" if transform == "sh-to-ps1" else ".bat")
+    if flavor is None:  # none / config-normalize / unknown: nothing to verify
+        return {
+            "target_name": target,
+            "content": draft,
+            "ok": True,
+            "fixed": False,
+            "retries": 0,
+            "notes": f"no-critic-needed:{transform}",
+        }
+    current, retries, fixed = draft, 0, False
+    issues = validate_shell(current, flavor)
+    while issues and retries < MAX_CRITIC_RETRIES:
+        current = _auto_fix(current, flavor)
+        fixed = True
+        retries += 1
+        issues = validate_shell(current, flavor)
+    ok = not issues
+    notes = (
+        f"{CRITIC_MODEL} critic: {'verified clean' if ok else 'remaining: ' + ','.join(issues)}"
+        f" after {retries} retr{'y' if retries == 1 else 'ies'} (dev-fallback)"
+    )
+    return {
+        "target_name": target,
+        "content": current,
+        "ok": ok,
+        "fixed": fixed,
+        "retries": retries,
+        "notes": notes,
+    }
+
+
 def transpile_with_critic(filename: str, content: bytes, transform: str) -> dict:
     """Draft (Spark) + critic (Wonder, <=3 retries). Dev = local rewrite."""
     text = content.decode("utf-8", errors="replace")
-    target = filename
-    notes = "dev-fallback"
     if transform == "sh-to-ps1":
-        fixed = sh_to_ps1(text)
-        target = filename.rsplit(".", 1)[0] + ".ps1"
-    elif transform == "ps1-to-sh":
-        fixed = ps1_to_sh(text)
-        target = filename.rsplit(".", 1)[0] + ".sh"
+        draft = sh_to_ps1(text)
+    elif transform in ("ps1-to-sh", "bat-to-sh"):
+        draft = ps1_to_sh(text)
     elif transform in ("none", "config-normalize"):
-        fixed = text
+        return {
+            "target_name": filename,
+            "content_b64": _b64(text.encode("utf-8")),
+            "transform": transform,
+            "notes": "passthrough",
+            "ok": True,
+            "retries": 0,
+        }
     else:
-        fixed = text
-        notes = f"unknown-transform:{transform}; passthrough"
+        return {
+            "target_name": filename,
+            "content_b64": _b64(text.encode("utf-8")),
+            "transform": transform,
+            "notes": f"unknown-transform:{transform}; passthrough",
+            "ok": True,
+            "retries": 0,
+        }
     # Prod path would call DRAFT_MODEL then CRITIC_MODEL up to
-    # MAX_CRITIC_RETRIES; dev short-circuits with the deterministic draft.
-    _ = MAX_CRITIC_RETRIES
+    # MAX_CRITIC_RETRIES; dev runs the deterministic validator loop.
+    verdict = critic_verify(filename, draft, transform)
     return {
-        "target_name": target,
-        "content_b64": _b64(fixed.encode("utf-8")),
+        "target_name": verdict["target_name"],
+        "content_b64": _b64(verdict["content"].encode("utf-8")),
         "transform": transform,
-        "notes": notes,
+        "notes": verdict["notes"],
+        "ok": verdict["ok"],
+        "retries": verdict["retries"],
     }
 
 

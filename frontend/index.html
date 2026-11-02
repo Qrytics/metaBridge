@@ -16,31 +16,52 @@
         <span class="k">CURSOR_OWNER </span><b id="owner-win" class="active">WIN</b> | <b id="owner-mac">MAC</b>
       </div>
       <div class="metric"><span class="k">MODE </span><b id="m-mode">SIM-DUAL</b></div>
+      <div class="metric seg">
+        <span class="k">SRC </span>
+        <button id="src-sandbox" class="segbtn active">PLAYABLE_TERRARIA_SANDBOX</button><button id="src-agent" class="segbtn">LIVE_AGENT_STREAM</button>
+      </div>
+      <div class="metric"><button id="btn-sam-mode" class="ghostbtn">SAM 3.1 RIP MODE: OFF</button></div>
+      <div class="metric"><button id="btn-mic" class="ghostbtn">VOICE KVM MIC</button></div>
     </div>
 
     <div id="stages">
       <div class="viewport" id="vp-win">
         <header><span>WIN · LEFT · HOST</span><span id="win-geom"></span></header>
         <canvas id="cv-win" width="960" height="600"></canvas>
+        <div class="files" id="files-win"></div>
       </div>
-      <div id="bezel-strip" title="Neural bezel"><div class="lbl">BEZEL</div></div>
+      <div id="bezel-strip" title="Neural membrane"><div class="lbl">BEZEL</div></div>
       <div class="viewport" id="vp-mac">
         <header><span>MAC · RIGHT · CLIENT</span><span id="mac-geom"></span></header>
         <canvas id="cv-mac" width="960" height="600"></canvas>
+        <div class="files" id="files-mac"></div>
       </div>
     </div>
 
     <div id="controls">
       <div class="ctl">
-        <label for="drag">WIN_X drag</label>
-        <input id="drag" type="range" min="0" max="1400" value="700" />
+        <label for="drag">WIN_X debug</label>
+        <input id="drag" type="range" min="0" max="1440" value="240" />
       </div>
-      <div class="ctl"><button id="btn-shot">Teleport frame to Mac</button></div>
-      <div class="ctl"><button id="btn-sam" class="ghost">SAM rip: boss</button></div>
-      <div class="ctl"><button id="btn-xfer" class="ghost">Bezel transfer .sh → .ps1</button></div>
-      <div class="ctl"><button id="btn-voice" class="ghost">Voice cmd</button></div>
+      <div class="ctl"><button id="btn-v50">VOICE: 50% straddle</button></div>
+      <div class="ctl"><button id="btn-vmac" class="ghost">VOICE: teleport to Mac</button></div>
+      <div class="ctl"><button id="btn-vwin" class="ghost">VOICE: back to Win</button></div>
+      <div class="ctl"><span class="hint">drag title bar · A/D move · W/Space jump · click mine · right-click place · 1-5 select · Alt+click SAM rip</span></div>
     </div>
     <div id="log" aria-live="polite"></div>
+
+    <div id="modal" hidden>
+      <div id="modal-box">
+        <div id="modal-title">CODE DIFF &amp; CRITIC INSPECTOR</div>
+        <div id="modal-cols">
+          <div><div class="mhead" id="diff-a-name">BEFORE</div><pre id="diff-a"></pre></div>
+          <div><div class="mhead" id="diff-b-name">AFTER</div><pre id="diff-b"></pre></div>
+        </div>
+        <div id="modal-notes"></div>
+        <div><button id="modal-close">CLOSE</button></div>
+      </div>
+    </div>
+    <div id="sprite-layer"></div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -5,7 +5,6 @@ Sim-dual serves one process driving both viewports for local testing.
 """
 
 import argparse
-import asyncio
 import time
 from collections import deque
 
@@ -91,29 +90,48 @@ def restyle_asset(body: RestyleBody) -> dict:
 
 @app.websocket("/ws/viewport")
 async def ws_viewport(ws: WebSocket) -> None:
+    """Live viewport bus: binary JPEG/WebP from a publisher (agent) is
+    rebroadcast to every other subscriber; text frames get a tick reply."""
     await ws.accept()
     _viewport_subs.add(ws)
+    _state["viewers"] = len(_viewport_subs)
     try:
         while True:
-            await asyncio.sleep(1 / 60)
-            # Heartbeat keeps 60fps cadence visible to HUD; binary frames
-            # are pushed by agent/capture.py via broadcast_frame().
-            await ws.send_json({"tick": time.time()})
+            msg = await ws.receive()
+            if msg.get("bytes") is not None:
+                await broadcast_frame(msg["bytes"], exclude=ws)
+            elif msg.get("text") is not None:
+                await ws.send_json({"tick": time.time()})
+            elif msg.get("type") == "websocket.disconnect":
+                break
     except WebSocketDisconnect:
         pass
     finally:
         _viewport_subs.discard(ws)
+        _state["viewers"] = len(_viewport_subs)
 
 
-async def broadcast_frame(payload: bytes) -> None:
+async def broadcast_frame(payload: bytes, exclude: WebSocket | None = None) -> None:
     dead = []
     for ws in list(_viewport_subs):
+        if ws is exclude:
+            continue
         try:
             await ws.send_bytes(payload)
         except Exception:
             dead.append(ws)
     for ws in dead:
         _viewport_subs.discard(ws)
+    _state["viewers"] = len(_viewport_subs)
+
+
+@app.post("/viewport/frame")
+async def viewport_frame(request: Request) -> dict:
+    """HTTP publisher path for agent/capture.py::publish_loop."""
+    body = await request.body()
+    if body:
+        await broadcast_frame(body)
+    return {"viewers": len(_viewport_subs), "bytes": len(body)}
 
 
 @app.websocket("/ws/input")

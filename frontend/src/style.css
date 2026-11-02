@@ -148,3 +148,133 @@ input[type="range"] { width: 180px; accent-color: var(--sig); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* Stage 2: membrane workflows (square, HUD-grade, no rounded gloss) */
+
+.seg { display: flex; align-items: center; gap: 0; }
+.segbtn {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-left: none;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.segbtn:first-of-type { border-left: 1px solid var(--line); }
+.segbtn.active { background: var(--sig); color: #06110a; border-color: var(--sig); }
+
+.ghostbtn {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: transparent;
+  color: var(--txt);
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.ghostbtn.armed { border-color: var(--amber); color: var(--amber); }
+#btn-mic.live { border-color: var(--sig); color: var(--sig); }
+
+#bezel-strip.amber { background: var(--amber); }
+#bezel-strip.amber .lbl { color: #1a1000; }
+
+.files { position: absolute; inset: 34px 0 0 0; pointer-events: none; z-index: 4; }
+.fileicon {
+  position: absolute;
+  width: 92px;
+  padding: 6px 4px;
+  background: #141a24;
+  border: 1px solid var(--line);
+  color: var(--txt);
+  font-size: 10px;
+  text-align: center;
+  cursor: grab;
+  pointer-events: auto;
+  user-select: none;
+}
+.fileicon .glyph {
+  display: block;
+  font-size: 22px;
+  line-height: 1.2;
+  color: var(--dim);
+}
+.fileicon.ps1 .glyph { color: var(--mac); }
+.fileicon.sh .glyph { color: var(--sig); }
+.fileicon.wld .glyph { color: var(--amber); }
+.fileicon.bat .glyph { color: #e08a8a; }
+.fileicon small { display: block; color: var(--dim); margin-top: 2px; }
+
+#sprite-layer { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
+.spritecard {
+  position: fixed;
+  width: 110px;
+  background: #0c1219;
+  border: 1px solid #39ff88;
+  color: var(--txt);
+  font-size: 10px;
+  padding: 6px;
+  cursor: grab;
+  pointer-events: auto;
+  user-select: none;
+}
+.spritecard canvas { width: 100%; display: block; background: #05070a; }
+.spritecard .row { display: flex; gap: 4px; margin-top: 4px; }
+.spritecard button {
+  flex: 1;
+  font-size: 9px;
+  padding: 4px 2px;
+}
+.spritecard .hd { color: var(--amber); }
+
+#modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 5, 8, 0.82);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#modal[hidden] { display: none; }
+#modal-box {
+  width: min(880px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--sig);
+  padding: 14px;
+}
+#modal-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sig);
+  margin-bottom: 10px;
+}
+#modal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+#modal-cols > div { border: 1px solid var(--line); }
+#modal-cols > div + div { border-left: none; }
+.mhead {
+  font-size: 11px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+}
+#modal-cols pre {
+  margin: 0;
+  padding: 10px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--txt);
+  max-height: 320px;
+  overflow: auto;
+}
+#modal-notes {
+  font-size: 11px;
+  color: var(--amber);
+  padding: 10px 0;
+}
+#modal-close { margin-top: 4px; }
+
+.hint { color: var(--dim); font-size: 11px; }
