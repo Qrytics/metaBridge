@@ -83,6 +83,11 @@ Sleek hardware-KVM + Neural Bezel HUD: `border-radius: 0` everywhere, square cor
   mac graphite) on each viewport canvas, and the window/span buffers go
   transparent where the sky was. Works in window and SPAN modes; file icons
   (HTML layer) stay on top like real desktop icons.
+- **Cast mode (`?cast=1`):** fullscreen view-only spectator for phones/tablets.
+  Forces SPAN + projection on one canvas, hides chrome/inputs (clicks and keys
+  ignored), requests a screen wake lock. iOS meta tags enable Add-to-Home-Screen
+  fullscreen web clips. Widgets/live wallpapers can't stream on stock iOS, so
+  the home-screen story is the web clip, not a Live Activity.
 - **Direct title-bar drag (primary; `WIN_X` slider is debug readout only).**
   Window lives in global desktop coords: left viewport covers `[0, W_LEFT)`,
   right covers `[W_LEFT, W_LEFT + W_RIGHT)`. Mousedown hit-tests the 28px

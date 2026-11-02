@@ -13,6 +13,9 @@ const TITLE = 'TERRARIA.EXE [PID 4812] // 60 FPS STREAM';
 
 const params = new URLSearchParams(location.search);
 const simDual = params.get('sim-dual') !== '0';
+// CAST mode (?cast=1): fullscreen view-only spectator for phones/tablets.
+// Add to Home Screen on iOS for a one-tap fullscreen Terraria cast.
+const castMode = params.get('cast') === '1';
 document.getElementById('m-mode').textContent = simDual ? 'SIM-DUAL' : 'LINKED';
 
 const cvWin = document.getElementById('cv-win');
@@ -173,6 +176,7 @@ function onMove(canvas, isRight, ev) {
 }
 function onUp(canvas, isRight, ev) {
   const [gx, gy] = globalFromEvent(canvas, isRight, ev.clientX, ev.clientY);
+  if (castMode) return; // spectators don't touch the world
   if (dragging) {
     dragging = false;
     const h = dragHandoff(Math.round(gx), W_LEFT, false);
@@ -253,6 +257,7 @@ window.addEventListener('mouseup', () => {
 // Keyboard: A/D/W/S/Space + arrows, 1-5 select block.
 const KEYMAP = { a: 'left', arrowleft: 'left', d: 'right', arrowright: 'right', w: 'jump', s: null, ' ': 'jump', arrowup: 'jump' };
 window.addEventListener('keydown', (ev) => {
+  if (castMode) return; // spectators don't touch the world
   const k = ev.key.toLowerCase();
   if (k >= '1' && k <= '5') {
     game.selected = [1, 2, 3, 5, 4][Number(k) - 1];
@@ -662,6 +667,19 @@ mountOSDrop();
 dragSlider.addEventListener('input', () => { winX = Number(dragSlider.value); });
 mountFiles();
 
+if (castMode) {
+  // Phones/tablets: fullscreen view-only spectator, desktop behind the world.
+  document.body.classList.add('cast');
+  if (!projecting) setProjecting(true);
+  setMode('span');
+  log('CAST spectator: fullscreen live Terraria, view-only');
+  try {
+    const lock = () => navigator.wakeLock?.request('screen').catch(() => {});
+    lock();
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) lock(); });
+  } catch { /* wake lock unsupported: screen may sleep */ }
+}
+
 function drawWindowChrome() {
   if (projecting) winCtx.clearRect(0, 0, WIN_W, WIN_H);
   else {
@@ -711,6 +729,15 @@ function drawSpanFrame() {
   spanCtx.font = '11px monospace';
   spanCtx.fillText('TERRARIA.EXE // SPAN 1920px 1:1 // WIN + MAC', 14, 22);
   drawRipContours();
+  if (castMode) {
+    // One fullscreen canvas: world band fitted edge-to-edge, desktop behind.
+    if (projecting) paintWallpaper(ctxWin, cvWin.width, cvWin.height, 'mac');
+    else ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
+    ctxWin.drawImage(spanCanvas, 0, SPAN_YOFF, SPAN_W, WORLD_H, 0, SPAN_YOFF, W_LEFT, WORLD_H);
+    document.getElementById('win-geom').textContent = 'CAST live 1920px world';
+    strip.classList.add('lit');
+    return;
+  }
   if (projecting) paintWallpaper(ctxWin, cvWin.width, cvWin.height, 'win');
   else ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
   ctxWin.drawImage(spanCanvas, 0, 0, W_LEFT, 600, 0, 0, W_LEFT, 600);

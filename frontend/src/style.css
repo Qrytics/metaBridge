@@ -72,6 +72,19 @@ body {
 }
 #osdrop.show { display: flex; }
 
+/* CAST mode (?cast=1): fullscreen phone/tablet spectator */
+body.cast #controls,
+body.cast #log,
+body.cast .files,
+body.cast #sprite-layer,
+body.cast #bezel-strip,
+body.cast #vp-mac,
+body.cast #modal { display: none; }
+body.cast #stages { height: calc(100vh - 49px); }
+body.cast .viewport { border-right: none; }
+body.cast #hud .metric .ghostbtn,
+body.cast #hud .metric .segbtn { display: none; }
+
 .viewport {
   position: relative;
   background: #05070a;
