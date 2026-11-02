@@ -44,7 +44,8 @@ def main() -> int:
     procs = []
     try:
         procs.append(subprocess.Popen(
-            [py, "-m", "uvicorn", "backend.main:app", "--host", bind, "--port", str(a.port)],
+            [py, "-m", "uvicorn", "backend.main:app", "--host", bind, "--port", str(a.port),
+             "--log-level", "warning", "--no-access-log"],
             cwd=ROOT, env=env,
         ))
         if not a.no_agent:
