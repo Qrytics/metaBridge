@@ -51,6 +51,7 @@ Implemented in `backend/bezel.py`, mirrored in `frontend/src/bezel.js`. Tests pi
 Rules:
 
 - `ENV=dev` (or missing keys) → deterministic local fallbacks, no network: echo/sh↔ps1 header rewrite, center-box pseudo-mask, canned transcript/action, tint restyle. Production paths only when `META_API_KEY` / `BASETEN_API_KEY` set.
+- All five membranes have live paths with identical fallback semantics (try live → None on any failure → dev fallback): Spark draft + Wonder critic (`chat/completions`), SAM 3.1 (`POST {META_SAM_URL|{META_API_URL}/sam-3.1/segment}` JSON, accepts `bbox`/`polygon`/`cutout_png_b64`/`mask_rle`), voice (`POST {META_VOICE_URL|{META_API_URL}/audio/transcriptions}` multipart, OpenAI-compatible), image (`POST {META_IMAGE_URL|{META_API_URL}/images/edits}` multipart, accepts `b64_json` or `url`). Endpoint shapes are overridable per-model env (`META_SAM_URL`, `META_VOICE_URL`, `META_IMAGE_URL`, `BASETEN_API_URL`) without code changes.
 - Static JSON schemas live in system prompts (prompt caching); never build schemas dynamically per request.
 - `MAX_CRITIC_RETRIES = 3` for the Wonder critic loop (draft → critic → fix, max 3 fixes).
 - Never commit keys. Env: `META_API_KEY`, `BASETEN_API_KEY`, `ENV=dev|prod`.
@@ -69,6 +70,13 @@ Sleek hardware-KVM + Neural Bezel HUD: `border-radius: 0` everywhere, square cor
 
 ## 7. Stage 2 — live streaming, direct drag, playable sandbox, membrane DnD
 
+- **SPAN mode (`[SPAN BOTH SCREENS]`):** one 120-column world (1920px, 16px tiles)
+  rendered 1:1 with zero stretch: left canvas shows global `[0,960)`, right
+  shows `[960,1920)` from a single `spanCanvas` buffer. The floating window
+  is parked; player/inventory/day carry over (`carryPlayer`). All input, SAM
+  rip, and reverse-tunnel logging route into the span world; title-bar drag
+  and voice glides are window-mode only (they auto-exit SPAN first).
+  `bezel.spanCamX` / `spanGlobalToWorld` (mirrored py/js) own the math.
 - **Direct title-bar drag (primary; `WIN_X` slider is debug readout only).**
   Window lives in global desktop coords: left viewport covers `[0, W_LEFT)`,
   right covers `[W_LEFT, W_LEFT + W_RIGHT)`. Mousedown hit-tests the 28px

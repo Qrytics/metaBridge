@@ -77,6 +77,16 @@ def test_viewport_frame_publish_endpoint():
     assert res.json()["bytes"] == 11
 
 
+def test_span_camera_and_mapping():
+    # World exactly fills both screens 1:1: no camera, identity x mapping.
+    assert bezel.span_cam_x(960, 1920, 1920) == 0.0
+    assert bezel.span_global_to_world(1400, 300, 156) == (1400, 144)
+    # Oversized world: camera centers on the player, clamped to edges.
+    assert bezel.span_cam_x(2000, 1920, 3840) == 1040.0
+    assert bezel.span_cam_x(100, 1920, 3840) == 0.0
+    assert bezel.span_cam_x(3800, 1920, 3840) == 1920.0
+
+
 def test_viewport_ws_binary_broadcast():
     with client.websocket_connect("/ws/viewport") as viewer:
         with client.websocket_connect("/ws/viewport") as publisher:

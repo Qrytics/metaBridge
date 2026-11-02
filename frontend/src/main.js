@@ -1,5 +1,5 @@
-import { cursorOwner, dragHandoff, springStep, straddleView, viewportToFrame } from './bezel.js';
-import { createGame, hitSlime, mineAt, placeAt, renderGame, stepGame, tileName, WORLD_H, WORLD_W } from './game.js';
+import { cursorOwner, dragHandoff, SPAN_W, SPAN_WORLD_COLS, spanCamX, spanGlobalToWorld, springStep, straddleView, viewportToFrame } from './bezel.js';
+import { createGame, hitSlime, mineAt, placeAt, renderGame, skyColor, stepGame, tileName, WORLD_H, WORLD_W } from './game.js';
 import { decodeB64, restyleAsset, samRip, transferFile, voiceCommand, voiceCommandRaw } from './membrane.js';
 
 // --- Global desktop geometry (canvas px = global units) ----------------------
@@ -24,6 +24,13 @@ const strip = document.getElementById('bezel-strip');
 
 // --- Shared world state: ONE buffer renders both viewports (zero tearing) ---
 const game = createGame();
+// SPAN mode: one 120-column world (1920px, 1:1) stretched across BOTH screens.
+const SPAN_YOFF = Math.floor((600 - WORLD_H) / 2); // 156
+const spanGame = createGame(SPAN_WORLD_COLS);
+const spanCanvas = document.createElement('canvas');
+spanCanvas.width = SPAN_W; spanCanvas.height = 600;
+const spanCtx = spanCanvas.getContext('2d');
+let mode = 'window'; // 'window' | 'span'
 const worldCanvas = document.createElement('canvas');
 worldCanvas.width = WORLD_W; worldCanvas.height = WORLD_H;
 const worldCtx = worldCanvas.getContext('2d');
@@ -53,8 +60,9 @@ function tunnel(msg) { log(`MAC -> WIN INPUT TUNNEL: ${msg}`); }
 window.__metaBridge = {
   get winX() { return Math.round(winX); },
   get winY() { return Math.round(winY); },
-  get playerX() { return Math.round(game.player.x); },
-  get straddle() { return straddleView(winX, winY, WIN_W, WIN_H, W_LEFT).straddleOffsetPx; },
+  get mode() { return mode; },
+  get playerX() { return Math.round((mode === 'span' ? spanGame : game).player.x); },
+  get straddle() { return mode === 'span' ? 1920 : straddleView(winX, winY, WIN_W, WIN_H, W_LEFT).straddleOffsetPx; },
   get owner() { return owner; },
   setWinX(x) { winX = Math.max(0, Math.min(x, W_LEFT + W_RIGHT - WIN_W)); },
 };
@@ -132,6 +140,7 @@ function onDown(canvas, isRight, ev) {
   cursorGX = gx; cursorGY = gy; setOwner(gx);
   downGX = gx; downGY = gy; downBtn = ev.button; downAlt = ev.altKey;
   if (ev.button === 2) return; // right-click reserves for block place (on mouseup)
+  if (mode === 'span') { dragging = false; return; } // full-bleed: no window to drag
   if (hitTitleBar(gx, gy)) {
     dragging = true; dragMoved = 0;
     dragGrabDX = gx - winX; dragGrabDY = gy - winY;
@@ -171,27 +180,34 @@ function onUp(canvas, isRight, ev) {
   }
   // Click (no drag): game input or SAM rip.
   if (Math.abs(gx - downGX) + Math.abs(gy - downGY) > 6) return;
-  if (!inWindow(gx, gy)) return;
-  const [wx, wy] = globalToGame(gx, gy);
+  const span = mode === 'span';
+  const g = span ? spanGame : game;
+  let wx, wy;
+  if (span) {
+    [wx, wy] = spanGlobalToWorld(Math.round(gx), Math.round(gy), SPAN_YOFF);
+  } else {
+    if (!inWindow(gx, gy)) return;
+    [wx, wy] = globalToGame(gx, gy);
+  }
   if (wy < 0 || wy >= WORLD_H) return;
   const macSide = owner === 'MAC';
   if (samMode || downAlt || ev.altKey) {
-    samRipAt(wx, wy, gx, gy, macSide);
+    samRipAt(g, span ? spanCanvas : worldCanvas, wx, wy, gx, gy, macSide);
     return;
   }
   const btn = downBtn === 2 || ev.button === 2 ? 2 : 0;
   forwardInput('click', { button: btn, gx: Math.round(wx), gy: Math.round(wy), sam: samMode || downAlt || ev.altKey });
   if (btn === 2) {
-    if (placeAt(game, wx, wy)) {
+    if (placeAt(g, wx, wy)) {
       if (macSide) tunnel(`PLACE (${Math.round(wx)},${Math.round(wy)})`);
-      else log(`place ${tileName(game.selected)} @(${Math.round(wx)},${Math.round(wy)})`);
+      else log(`place ${tileName(g.selected)} @(${Math.round(wx)},${Math.round(wy)})`);
     }
   } else {
-    if (hitSlime(game, wx, wy)) {
+    if (hitSlime(g, wx, wy)) {
       if (macSide) tunnel(`SWORD_HIT boss (${Math.round(wx)},${Math.round(wy)})`);
-      else log(`sword hit! slime hp=${game.slime.hp}`);
+      else log(`sword hit! slime hp=${g.slime.hp}`);
     } else {
-      const t = mineAt(game, wx, wy);
+      const t = mineAt(g, wx, wy);
       if (t !== null) {
         if (macSide) tunnel(`CLICK (${Math.round(wx)},${Math.round(wy)}) mine ${tileName(t)}`);
         else log(`mine ${tileName(t)} @(${Math.round(wx)},${Math.round(wy)})`);
@@ -365,27 +381,58 @@ function setSamMode(on) {
 }
 btnSamMode.onclick = () => setSamMode(!samMode);
 
-function pickPrompt(wx, wy) {
-  if (hitSlime(game, wx, wy)) return 'boss';
-  const p = game.player;
+function pickPrompt(g, wx, wy) {
+  if (hitSlime(g, wx, wy)) return 'boss';
+  const p = g.player;
   if (wx >= p.x - 6 && wx <= p.x + p.w + 6 && wy >= p.y - 8 && wy <= p.y + p.h + 6) return 'player character';
-  const e = game.eye;
+  const e = g.eye;
   if (wx >= e.x && wx <= e.x + 30 && wy >= e.y && wy <= e.y + 22) return 'flying eye boss';
   const c = Math.floor(wx / 16), r = Math.floor(wy / 16);
-  if (game.at && game.at(c, r) === 5) return 'torch';
+  if (g.at && g.at(c, r) === 5) return 'torch';
   return 'item';
 }
-async function samRipAt(wx, wy, gx, gy, macSide) {
+
+// --- SPAN mode: Terraria across BOTH screens, 1:1, zero stretch -------------
+const btnSpan = document.getElementById('btn-span');
+function carryPlayer(src, dst) {
+  const d = dst.player, s = src.player;
+  d.x = Math.max(0, Math.min((s.x / (src.cols * 16)) * (dst.cols * 16), dst.cols * 16 - d.w));
+  d.y = 0; d.vy = 0; // drops in — lands on terrain
+  dst.inventory = { ...src.inventory };
+  dst.selected = src.selected;
+  dst.dayT = src.dayT;
+  dst.kills = src.kills;
+}
+function setMode(next) {
+  if (mode === next) return;
+  carryPlayer(mode === 'span' ? spanGame : game, next === 'span' ? spanGame : game);
+  mode = next;
+  const span = mode === 'span';
+  btnSpan.textContent = span ? 'SPAN: ON (BOTH SCREENS)' : 'SPAN BOTH SCREENS';
+  btnSpan.classList.toggle('armed', span);
+  dragSlider.disabled = span;
+  dragging = false;
+  log(span ? 'SPAN mode: 1920px world 1:1 across WIN+MAC — one Terraria, two screens'
+    : 'window mode: floating game window is back');
+}
+btnSpan.onclick = () => setMode(mode === 'span' ? 'window' : 'span');
+async function samRipAt(g, srcCanvas, wx, wy, gx, gy, macSide) {
   const [fx, fy] = viewportToFrame(wx, wy, 0, 0, 1);
-  const prompt = pickPrompt(wx, wy);
+  const prompt = pickPrompt(g, wx, wy);
   if (macSide) tunnel(`SAM_RIP "${prompt}" @frame(${Math.round(fx)},${Math.round(fy)})`);
   log(`sam-3.1 rip "${prompt}" @frame(${Math.round(fx)},${Math.round(fy)})`);
+  let frameB64 = '';
   try {
-    const res = await samRip(prompt, [fx / WORLD_W, fy / WORLD_H]);
+    frameB64 = srcCanvas.toDataURL('image/jpeg', 0.7).split(',')[1] || '';
+  } catch { frameB64 = ''; }
+  try {
+    const res = await samRip(prompt, [fx / WORLD_W, fy / WORLD_H], frameB64);
     const [x0, y0, x1, y1] = res.bbox || [0.25, 0.25, 0.75, 0.75];
-    const poly = polyFromBbox(x0 * WORLD_W, y0 * WORLD_H, x1 * WORLD_W, y1 * WORLD_H, prompt);
+    const livePoly = Array.isArray(res.polygon) && res.polygon.length >= 3 ? res.polygon : null;
+    const poly = livePoly || polyFromBbox(x0 * WORLD_W, y0 * WORLD_H, x1 * WORLD_W, y1 * WORLD_H, prompt);
+    if (livePoly) log('sam-3.1 live mask received (model polygon)');
     rips.push({ fx: (x0 + x1) / 2 * WORLD_W, fy: (y0 + y1) / 2 * WORLD_H, prompt, poly });
-    mintSpriteCard(poly, prompt, gx, gy);
+    mintSpriteCard(srcCanvas, poly, prompt, gx, gy);
     log(`sam-3.1 contour locked (${poly.length} pts) — drag the card across the bezel`);
   } catch (err) {
     log(`sam-3.1 rip !! ${err}`);
@@ -405,7 +452,7 @@ function polyFromBbox(x0, y0, x1, y1, seed) {
   }
   return pts;
 }
-function mintSpriteCard(poly, prompt, gx, gy) {
+function mintSpriteCard(srcCanvas, poly, prompt, gx, gy) {
   const layer = document.getElementById('sprite-layer');
   const card = document.createElement('div');
   card.className = 'spritecard';
@@ -415,13 +462,14 @@ function mintSpriteCard(poly, prompt, gx, gy) {
   const h = Math.min(WORLD_H - y0, Math.max(...ys) - y0 + 12);
   card.innerHTML = `<canvas width="96" height="72"></canvas><div>${prompt}</div><div class="row"><button class="rs">MUSE IMAGE HD RESTYLE</button></div>`;
   const c = card.querySelector('canvas');
-  c.getContext('2d').drawImage(worldCanvas, x0, y0, w, h, 0, 0, 96, 72);
+  c.getContext('2d').drawImage(srcCanvas, x0, y0, w, h, 0, 0, 96, 72);
   card.style.left = `${Math.min(innerWidth - 130, gx / ((W_LEFT + W_RIGHT)) * innerWidth)}px`;
   card.style.top = '180px';
+  const cropB64 = c.toDataURL('image/png').split(',')[1] || '';
   card.querySelector('.rs').onclick = async (ev) => {
     ev.stopPropagation();
     try {
-      const res = await restyleAsset('', 'concept-art-hd');
+      const res = await restyleAsset(cropB64, 'concept-art-hd');
       card.insertAdjacentHTML('beforeend', `<div class="hd">HD restyle ✓ (${res.style})</div>`);
       log(`muse-image restyle ✓ "${prompt}" -> ${res.style}`);
     } catch (err) {
@@ -446,28 +494,33 @@ function mintSpriteCard(poly, prompt, gx, gy) {
   layer.appendChild(card);
 }
 function drawRipContours() {
-  winCtx.save();
-  winCtx.strokeStyle = '#39ff88';
-  winCtx.lineWidth = 2;
-  winCtx.shadowColor = '#39ff88';
-  winCtx.shadowBlur = 8;
+  // Window mode draws on the floating window buffer; SPAN draws on the
+  // full-bleed span buffer (contours live in world coords either way).
+  const ctx = mode === 'span' ? spanCtx : winCtx;
+  const yBase = mode === 'span' ? SPAN_YOFF : TITLE_H;
+  ctx.save();
+  ctx.strokeStyle = '#39ff88';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#39ff88';
+  ctx.shadowBlur = 8;
   for (const rip of rips.slice(-3)) {
-    winCtx.beginPath();
+    ctx.beginPath();
     rip.poly.forEach(([x, y], i) => {
-      const px = x, py = TITLE_H + y;
-      if (i === 0) winCtx.moveTo(px, py);
-      else winCtx.lineTo(px, py);
+      const px = x, py = yBase + y;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
     });
-    winCtx.closePath();
-    winCtx.stroke();
+    ctx.closePath();
+    ctx.stroke();
   }
-  winCtx.restore();
+  ctx.restore();
 }
 
 // --- Voice cross-OS command bar --------------------------------------------------
 const btnMic = document.getElementById('btn-mic');
 async function voiceAction(target, label) {
   btnMic.classList.add('live');
+  if (mode === 'span') setMode('window'); // glides act on the floating window
   try {
     const res = await voiceCommand(new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]));
     log(`voice "${res.transcript}" -> action=${res.action} (${label})`);
@@ -488,6 +541,7 @@ async function micTap() {
   // Real mic path: record ~2s, POST raw audio for FFmpeg normalization.
   // Falls back to the canned command when mic/bridge is unavailable.
   btnMic.classList.add('live');
+  if (mode === 'span') setMode('window'); // glides act on the floating window
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('no-mic-api');
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -625,12 +679,50 @@ function drawWindowChrome() {
   drawRipContours();
 }
 
+function drawSpanFrame() {
+  // Full-bleed 1:1 world across both canvases, bezel splits the image.
+  spanCtx.fillStyle = skyColor(spanGame.dayT);
+  spanCtx.fillRect(0, 0, SPAN_W, 600);
+  renderGame(spanCtx, spanGame, 0, SPAN_W, SPAN_YOFF);
+  spanCtx.fillStyle = 'rgba(5,7,10,0.85)';
+  spanCtx.fillRect(8, 8, 348, 20);
+  spanCtx.fillStyle = '#56d678';
+  spanCtx.font = '11px monospace';
+  spanCtx.fillText('TERRARIA.EXE // SPAN 1920px 1:1 // WIN + MAC', 14, 22);
+  drawRipContours();
+  ctxWin.clearRect(0, 0, cvWin.width, cvWin.height);
+  ctxWin.drawImage(spanCanvas, 0, 0, W_LEFT, 600, 0, 0, W_LEFT, 600);
+  ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
+  ctxMac.drawImage(spanCanvas, W_LEFT, 0, W_RIGHT, 600, 0, 0, W_RIGHT, 600);
+  document.getElementById('m-straddle').textContent = '1920';
+  document.getElementById('win-geom').textContent = 'SPAN left 960px live';
+  document.getElementById('mac-geom').textContent = 'SPAN right 960px live';
+  strip.classList.add('lit');
+  if (!simDual) {
+    ctxMac.fillStyle = 'rgba(5,7,10,0.85)';
+    ctxMac.fillRect(20, 556, 420, 22);
+    ctxMac.fillStyle = '#8a94a3';
+    ctxMac.font = '12px monospace';
+    ctxMac.fillText('SPAN LINKED: right half streams via WS /ws/viewport', 28, 571);
+  }
+}
+
 function frame() {
   // Spring animation (voice glide).
   if (springTarget !== null) {
     const [nx, nv] = springStep(winX, winVX, springTarget);
     winX = nx; winVX = nv;
     if (nv === 0 && nx === springTarget) { springTarget = null; log(`glide settled @win_x=${Math.round(winX)}`); }
+  }
+  if (mode === 'span') {
+    stepGame(spanGame, keys, 1);
+    drawSpanFrame();
+    if (!dragging) setOwner(cursorGX);
+    document.getElementById('owner-win').classList.toggle('active', owner === 'WIN');
+    document.getElementById('owner-mac').classList.toggle('active', owner === 'MAC');
+    if (document.activeElement !== dragSlider) dragSlider.value = String(Math.round(winX));
+    finishFrame();
+    return;
   }
   stepGame(game, keys, 1);
   drawWindowChrome();
@@ -673,6 +765,10 @@ function frame() {
     ctxMac.fillText('LINKED MODE: stream via WS /ws/viewport', 20, 40);
   }
 
+  finishFrame();
+}
+
+function finishFrame() {
   // Cursor cross.
   const drawCursor = (ctx, x, y) => {
     ctx.strokeStyle = '#ffb224';

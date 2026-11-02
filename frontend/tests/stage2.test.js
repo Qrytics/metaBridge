@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dragHandoff, springStep, straddleView, viewportToFrame } from '../src/bezel.js';
+import { dragHandoff, SPAN_W, SPAN_WORLD_COLS, spanCamX, spanGlobalToWorld, springStep, straddleView, viewportToFrame } from '../src/bezel.js';
 import { createGame, hitSlime, mineAt, placeAt, stepGame } from '../src/game.js';
 
 const W = 960;
@@ -79,6 +79,28 @@ describe('playable sandbox', () => {
     g.selected = mined;
     // Place back into a known air cell above the surface.
     expect(placeAt(g, 2 * 16 + 8, 2 * 16 + 8)).toBe(true);
+  });
+
+  it('span world is exactly 1920px wide: zero stretch, both halves align', () => {
+    expect(SPAN_W).toBe(1920);
+    expect(SPAN_WORLD_COLS * 16).toBe(1920);
+    expect(spanCamX(960, 1920, 1920)).toBe(0);
+    expect(spanGlobalToWorld(1400, 300, 156)).toEqual([1400, 144]);
+    expect(spanCamX(2000, 1920, 3840)).toBe(1040);
+    expect(spanCamX(100, 1920, 3840)).toBe(0);
+    expect(spanCamX(3800, 1920, 3840)).toBe(1920);
+  });
+
+  it('wide world simulates and stays in bounds', () => {
+    const g = createGame(120);
+    expect(g.cols).toBe(120);
+    expect(g.tiles.length).toBe(120 * 18);
+    for (let i = 0; i < 400; i++) stepGame(g, { right: true }, 1);
+    expect(g.player.x).toBeGreaterThan(100);
+    expect(g.player.x).toBeLessThan(120 * 16);
+    const before = g.inventory[1] || 0;
+    mineAt(g, 8 * 16 + 8, 12 * 16 + 8);
+    expect((g.inventory[1] || 0) + (g.inventory[2] || 0)).toBeGreaterThanOrEqual(before);
   });
 
   it('sword kills the slime in 3 hits', () => {

@@ -70,6 +70,41 @@ const px1 = await page.evaluate(() => window.__metaBridge.playerX);
 console.log('player', px0, '->', px1);
 if (!(px1 > px0)) throw new Error('player did not move with D key');
 
+// SPAN mode: one 1920px world 1:1 across both screens.
+await page.locator('#btn-span').click();
+await page.waitForFunction(() => window.__metaBridge.mode === 'span');
+await page.waitForTimeout(500);
+const span = await page.evaluate(() => ({
+  s: document.getElementById('m-straddle').textContent,
+  geom: document.getElementById('mac-geom').textContent,
+}));
+console.log('span', JSON.stringify(span));
+if (span.s !== '1920') throw new Error(`expected STRADDLE=1920 in span, got ${span.s}`);
+const spanCoverage = await page.evaluate(() => {
+  const frac = (id) => {
+    const c = document.getElementById(id);
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let lit = 0;
+    for (let i = 0; i < d.length; i += 40) if (d[i] + d[i + 1] + d[i + 2] > 24) lit++;
+    return lit / (d.length / 40);
+  };
+  return { win: frac('cv-win'), mac: frac('cv-mac') };
+});
+console.log('span coverage', JSON.stringify(spanCoverage));
+if (spanCoverage.win < 0.05 || spanCoverage.mac < 0.02) throw new Error('span canvases not full-bleed');
+// Playable in span: run right, mine with a click on the Mac half.
+const spx0 = await page.evaluate(() => window.__metaBridge.playerX);
+await page.keyboard.down('d');
+await page.waitForTimeout(500);
+await page.keyboard.up('d');
+const spx1 = await page.evaluate(() => window.__metaBridge.playerX);
+console.log('span player', spx0, '->', spx1);
+if (!(spx1 > spx0)) throw new Error('player did not move in span mode');
+// Back to window mode: floating window restored.
+await page.locator('#btn-span').click();
+await page.waitForFunction(() => window.__metaBridge.mode === 'window');
+console.log('span off: window mode restored');
+
 await browser.close();
 if (errors.length) throw new Error(`console/page errors:\n${errors.join('\n')}`);
-console.log('VERIFY PASS: bezel drag, dual render, reverse input, zero console errors');
+console.log('VERIFY PASS: bezel drag, dual render, reverse input, span, zero console errors');

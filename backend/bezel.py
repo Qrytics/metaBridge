@@ -128,3 +128,20 @@ def viewport_to_frame(
         (click_x - view_origin_x) * scale,
         (click_y - view_origin_y) * scale,
     )
+
+
+#: SPAN mode: one world rendered 1:1 across both screens (Eyefinity-style).
+SPAN_W = 1920  # == W_LEFT + W_RIGHT, both canvases edge-to-edge
+SPAN_WORLD_COLS = 120  # 120 tiles * 16px == SPAN_W, zero stretch
+
+
+def span_cam_x(player_cx: float, view_w: float, world_w: float) -> float:
+    """Camera origin keeping the player centered, clamped to the world."""
+    if world_w <= view_w:
+        return 0.0
+    return max(0.0, min(player_cx - view_w / 2, world_w - view_w))
+
+
+def span_global_to_world(gx: float, gy: float, y_off: float) -> tuple[float, float]:
+    """SPAN mode is 1:1, so global x maps straight onto world x."""
+    return (gx, gy - y_off)

@@ -32,31 +32,33 @@ function hillY(c) {
   return ROWS - 6 + Math.round(2 * Math.sin(c / 5.2) + Math.cos(c / 8.7));
 }
 
-export function createGame() {
-  const tiles = new Uint8Array(COLS * ROWS);
-  const at = (c, r) => (c < 0 || r < 0 || c >= COLS || r >= ROWS ? T_STONE : tiles[r * COLS + c]);
-  const set = (c, r, t) => { if (c >= 0 && r >= 0 && c < COLS && r < ROWS) tiles[r * COLS + c] = t; };
-  for (let c = 0; c < COLS; c++) {
-    const s = hillY(c);
-    for (let r = s; r < ROWS; r++) set(c, r, r > s + 2 ? T_STONE : T_DIRT);
+export function createGame(cols = COLS, rows = ROWS) {
+  const tiles = new Uint8Array(cols * rows);
+  const at = (c, r) => (c < 0 || r < 0 || c >= cols || r >= rows ? T_STONE : tiles[r * cols + c]);
+  const set = (c, r, t) => { if (c >= 0 && r >= 0 && c < cols && r < rows) tiles[r * cols + c] = t; };
+  const surf = (c) => rows - 6 + Math.round(2 * Math.sin(c / 5.2) + Math.cos(c / 8.7));
+  for (let c = 0; c < cols; c++) {
+    const s = surf(c);
+    for (let r = s; r < rows; r++) set(c, r, r > s + 2 ? T_STONE : T_DIRT);
   }
-  // Trees (trunk + leaf blob), never on spawn columns 4..7.
-  for (const tc of [11, 19, 26]) {
-    const s = hillY(tc);
+  // Trees (trunk + leaf blob), never on the spawn columns.
+  const spawnC = Math.min(8, Math.max(2, cols >> 3));
+  for (let tc = 14; tc < cols - 2; tc += 11) {
+    if (Math.abs(tc - spawnC) < 4) continue;
+    const s = surf(tc);
     for (let r = s - 4; r < s; r++) set(tc, r, T_WOOD);
     for (let dc = -2; dc <= 2; dc++)
       for (let dr = -6; dr <= -3; dr++) {
         if (Math.abs(dc) + Math.abs(dr + 4) <= 4) set(tc + dc, s + dr, T_LEAF);
       }
   }
-  // Torches near spawn.
-  set(5, hillY(5) - 1, T_TORCH);
-  set(16, hillY(16) - 1, T_TORCH);
-  const spawnC = 5;
+  // Torches near spawn and mid-world.
+  set(spawnC, surf(spawnC) - 1, T_TORCH);
+  set(Math.min(cols - 3, spawnC + 12), surf(Math.min(cols - 3, spawnC + 12)) - 1, T_TORCH);
   return {
-    tiles, at, set,
-    player: { x: spawnC * TILE + 2, y: (hillY(spawnC) - 2) * TILE, w: 12, h: 22, vx: 0, vy: 0, onGround: false, facing: 1, swing: 0 },
-    slime: { x: 20 * TILE, y: 4 * TILE, w: 26, h: 18, vx: 0, vy: 0, hp: 3, cool: 0, dead: false },
+    cols, rows, tiles, at, set,
+    player: { x: spawnC * TILE + 2, y: (surf(spawnC) - 2) * TILE, w: 12, h: 22, vx: 0, vy: 0, onGround: false, facing: 1, swing: 0 },
+    slime: { x: (cols - 10) * TILE, y: 4 * TILE, w: 26, h: 18, vx: 0, vy: 0, hp: 3, cool: 0, dead: false },
     eye: { x: 15 * TILE, y: 2 * TILE, t: 0 },
     torches: [],
     inventory: { [T_DIRT]: 9, [T_STONE]: 4, [T_WOOD]: 0, [T_LEAF]: 0, [T_TORCH]: 2 },
@@ -68,9 +70,9 @@ export function createGame() {
 
 function solidAt(g, px, py) {
   const c = Math.floor(px / TILE), r = Math.floor(py / TILE);
-  if (c < 0 || c >= COLS) return true;
-  if (r < 0 || r >= ROWS) return r >= ROWS;
-  const t = g.tiles[r * COLS + c];
+  if (c < 0 || c >= g.cols) return true;
+  if (r < 0 || r >= g.rows) return r >= g.rows;
+  const t = g.tiles[r * g.cols + c];
   return t !== T_AIR;
 }
 
@@ -123,10 +125,10 @@ export function stepGame(g, keys, dt = 1) {
 
 export function mineAt(g, wx, wy) {
   const c = Math.floor(wx / TILE), r = Math.floor(wy / TILE);
-  if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return null;
-  const t = g.tiles[r * COLS + c];
+  if (c < 0 || r < 0 || c >= g.cols || r >= g.rows) return null;
+  const t = g.tiles[r * g.cols + c];
   if (t === T_AIR) return null;
-  g.tiles[r * COLS + c] = T_AIR;
+  g.tiles[r * g.cols + c] = T_AIR;
   g.inventory[t] = (g.inventory[t] || 0) + 1;
   g.player.swing = 12;
   return t;
@@ -134,8 +136,8 @@ export function mineAt(g, wx, wy) {
 
 export function placeAt(g, wx, wy) {
   const c = Math.floor(wx / TILE), r = Math.floor(wy / TILE);
-  if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return false;
-  if (g.tiles[r * COLS + c] !== T_AIR) return false;
+  if (c < 0 || r < 0 || c >= g.cols || r >= g.rows) return false;
+  if (g.tiles[r * g.cols + c] !== T_AIR) return false;
   const t = g.selected;
   if ((g.inventory[t] || 0) <= 0) return false;
   // Never seal the player inside their own body.
@@ -161,7 +163,7 @@ export function hitSlime(g, wx, wy) {
 
 // --- Rendering (world-space 480x288) ---------------------------------------
 
-function skyColor(dayT) {
+export function skyColor(dayT) {
   // dayT 0..1: 0.25 = noon. Blend day blue -> dusk orange -> night navy.
   const day = [125, 178, 232], dusk = [232, 140, 80], night = [8, 12, 26];
   const sun = Math.sin(dayT * Math.PI * 2 - Math.PI / 2) * 0.5 + 0.5; // 1 at noon
@@ -172,21 +174,23 @@ function skyColor(dayT) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-export function renderGame(ctx, g) {
+export function renderGame(ctx, g, camX = 0, viewW = WORLD_W, yOff = 0) {
   ctx.fillStyle = skyColor(g.dayT);
-  ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+  ctx.fillRect(0, 0, viewW, WORLD_H);
   // Sun / moon arc
   const a = g.dayT * Math.PI * 2 - Math.PI / 2;
-  const sx = WORLD_W / 2 + (WORLD_W / 2 - 20) * Math.cos(a);
+  const sx = viewW / 2 + (viewW / 2 - 20) * Math.cos(a);
   const sy = WORLD_H - 30 + (WORLD_H - 60) * Math.sin(a);
   ctx.fillStyle = '#ffd94d';
   ctx.fillRect(Math.round(sx) - 7, Math.round(sy) - 7, 14, 14);
-  // Tiles
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const t = g.tiles[r * COLS + c];
+  // Tiles (culled to the camera view)
+  const c0 = Math.max(0, Math.floor(camX / TILE) - 1);
+  const c1 = Math.min(g.cols - 1, Math.ceil((camX + viewW) / TILE) + 1);
+  for (let r = 0; r < g.rows; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const t = g.tiles[r * g.cols + c];
       if (t === T_AIR) continue;
-      const x = c * TILE, y = r * TILE;
+      const x = c * TILE - camX, y = r * TILE + yOff;
       ctx.fillStyle = TILE_COLORS[t];
       ctx.fillRect(x, y, TILE, TILE);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -203,11 +207,13 @@ export function renderGame(ctx, g) {
     }
   }
   const p = g.player;
+  const ox = (wx) => Math.round(wx - camX);
+  const oy = (wy) => Math.round(wy + yOff);
   // Shadow
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.fillRect(Math.round(p.x) - 1, Math.round(p.y + p.h) - 1, p.w + 2, 3);
+  ctx.fillRect(ox(p.x) - 1, oy(p.y + p.h) - 1, p.w + 2, 3);
   // Player (Terraria-style: skin, hair, eyes, swing arm)
-  const px = Math.round(p.x), py = Math.round(p.y);
+  const px = ox(p.x), py = oy(p.y);
   ctx.fillStyle = '#e8b07e';
   ctx.fillRect(px, py + 4, p.w, 14); // skin
   ctx.fillStyle = '#4a2f1a';
@@ -230,7 +236,7 @@ export function renderGame(ctx, g) {
   // King Slime (jumping blob + crown)
   const s = g.slime;
   if (!s.dead) {
-    const slx = Math.round(s.x), sly = Math.round(s.y);
+    const slx = ox(s.x), sly = oy(s.y);
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.fillRect(slx - 1, sly + s.h - 1, s.w + 2, 3);
     ctx.fillStyle = 'rgba(70,160,255,0.85)';
@@ -247,7 +253,7 @@ export function renderGame(ctx, g) {
     ctx.fillRect(slx + s.w - 10, sly - 10, 4, 3);
   }
   // Eye of Cthulhu (hovering eyeball + teeth)
-  const ex = Math.round(g.eye.x), ey = Math.round(g.eye.y);
+  const ex = ox(g.eye.x), ey = oy(g.eye.y);
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.fillRect(ex, ey, 30, 20);
   ctx.fillStyle = '#c22';

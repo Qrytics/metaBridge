@@ -112,6 +112,144 @@ def _live_draft(filename: str, text: str, transform: str) -> str | None:
     return "\n".join(lines).strip() + "\n"
 
 
+def _meta_json(url: str, key: str, payload: dict, timeout: int = 60) -> dict | None:
+    """Generic JSON POST to the Meta Model API. None on any failure."""
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            return json.loads(res.read())
+    except Exception:
+        return None
+
+
+def _meta_multipart(url: str, key: str, fields: dict, files: dict, timeout: int = 60) -> dict | None:
+    """Generic multipart POST (audio/images). Files: {name: (filename, bytes, mime)}."""
+    import io
+    import json
+    import urllib.request
+    import uuid
+
+    boundary = uuid.uuid4().hex
+    buf = io.BytesIO()
+    for k, v in fields.items():
+        buf.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
+    for name, (filename, data, mime) in files.items():
+        buf.write(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"'
+            f"\r\nContent-Type: {mime}\r\n\r\n".encode() + data + b"\r\n"
+        )
+    buf.write(f"--{boundary}--\r\n".encode())
+    req = urllib.request.Request(
+        url,
+        data=buf.getvalue(),
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            return json.loads(res.read())
+    except Exception:
+        return None
+
+
+def sam_rip_live(image_b64: str, prompt: str, point: list[float]) -> dict | None:
+    """Live SAM 3.1 segmentation. Returns {bbox, cutout_png_b64} or None."""
+    key = os.environ.get("META_API_KEY", "")
+    if not key or not image_b64:
+        return None
+    base = os.environ.get("META_API_URL", "https://api.meta.ai/v1").rstrip("/")
+    url = os.environ.get("META_SAM_URL", base + "/sam-3.1/segment")
+    body = _meta_json(url, key, {"model": RIP_MODEL, "image_b64": image_b64, "prompt": prompt, "point": point})
+    if not body:
+        return None
+    bbox = body.get("bbox") or [0.25, 0.25, 0.75, 0.75]
+    cutout = body.get("cutout_png_b64") or body.get("mask_rle") or ""
+    poly = body.get("polygon")
+    out: dict = {"bbox": bbox, "cutout_png_b64": cutout, "model": RIP_MODEL}
+    if poly:
+        out["polygon"] = poly
+    return out
+
+
+def voice_transcribe_live(wav_bytes: bytes) -> str | None:
+    """Live muse-voice-transcribe (OpenAI-compatible transcriptions). Returns text or None."""
+    key = os.environ.get("META_API_KEY", "")
+    if not key or not wav_bytes:
+        return None
+    base = os.environ.get("META_API_URL", "https://api.meta.ai/v1").rstrip("/")
+    url = os.environ.get("META_VOICE_URL", base + "/audio/transcriptions")
+    body = _meta_multipart(
+        url, key,
+        {"model": VOICE_MODEL, "response_format": "json"},
+        {"file": ("command.wav", wav_bytes, "audio/wav")},
+    )
+    if not body:
+        return None
+    return body.get("text") or body.get("transcript")
+
+
+def restyle_live(image_b64: str, style: str) -> dict | None:
+    """Live muse-image restyle (OpenAI-compatible images). Returns {image_b64} or None."""
+    import base64
+
+    key = os.environ.get("META_API_KEY", "")
+    if not key or not image_b64:
+        return None
+    base = os.environ.get("META_API_URL", "https://api.meta.ai/v1").rstrip("/")
+    url = os.environ.get("META_IMAGE_URL", base + "/images/edits")
+    try:
+        raw = base64.b64decode(image_b64)
+    except Exception:
+        return None
+    body = _meta_multipart(
+        url, key,
+        {"model": IMAGE_MODEL, "prompt": f"restyle as {style}, high-res game concept art"},
+        {"image": ("sprite.png", raw, "image/png")},
+    )
+    if not body:
+        return None
+    data = (body.get("data") or [{}])[0]
+    img = data.get("b64_json") or ""
+    if not img and data.get("url"):
+        img = data["url"]  # portal renders URLs too
+    if not img:
+        return None
+    return {"image_b64": img, "style": style, "model": IMAGE_MODEL}
+
+
+def action_from_transcript(transcript: str) -> str:
+    """Keyword-map a transcript onto a cross-OS action (shared live/dev)."""
+    t = (transcript or "").lower()
+    if "transpile" in t and "mac" not in t and "win" not in t:
+        return "transpile-all-scripts"
+    if "50" in t or "half" in t or ("straddle" in t and "mac" not in t):
+        return "glide-50%-straddle"
+    if "screenshot" in t or "mac" in t or "teleport" in t:
+        return "slide-window-to-mac+screenshot"
+    if "win" in t or "back" in t:
+        return "slide-window-to-win"
+    return "slide-window-to-mac+screenshot"
+
+
+def voice_command_live(wav_bytes: bytes) -> dict | None:
+    """Full live voice path: transcribe, then map onto an action."""
+    text = voice_transcribe_live(wav_bytes)
+    if not text:
+        return None
+    return {"transcript": text, "action": action_from_transcript(text), "model": VOICE_MODEL}
+
+
 def _live_critic_fix(draft: str, issues: list[str], flavor: str) -> str | None:
     key = os.environ.get("META_API_KEY", "")
     if not key:

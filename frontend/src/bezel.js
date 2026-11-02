@@ -59,3 +59,16 @@ export function springStep(x, v, target, k = 90, d = 14, dt = 1 / 60) {
   if (Math.abs(x - target) < 0.5 && Math.abs(v) < 0.5) { x = target; v = 0; }
   return [x, v];
 }
+
+// SPAN mode: one world rendered 1:1 across both screens (Eyefinity-style).
+export const SPAN_W = 1920; // == W_LEFT + W_RIGHT, both canvases edge-to-edge
+export const SPAN_WORLD_COLS = 120; // 120 tiles * 16px == SPAN_W, zero stretch
+
+export function spanCamX(playerCX, viewW, worldW) {
+  if (worldW <= viewW) return 0;
+  return Math.max(0, Math.min(playerCX - viewW / 2, worldW - viewW));
+}
+
+export function spanGlobalToWorld(gx, gy, yOff) {
+  return [gx, gy - yOff];
+}

@@ -54,7 +54,7 @@ Default `ENV=dev`: deterministic fallbacks, no network, no keys. For live models
 ENV=prod BASETEN_API_KEY=... META_API_KEY=... ./start-mac.sh
 ```
 
-`meta-models/muse-spark-open-1026` drafts + `muse-wonder-1.0` criticizes (≤3 retries) file transpiles; SAM/voice/image routers expose `/membrane/*` with dev fallbacks until wired.
+All five membranes go live under `ENV=prod`: `muse-spark-open-1026` drafts + `muse-wonder-1.0` criticizes (≤3 retries) file transpiles; SAM 3.1 segments the real posted frame; voice transcribes the real mic audio then keyword-maps to an action; `muse-image` restyles the real sprite crop. Any failure (or missing key) falls back to the deterministic dev result. Override per-model endpoints without code changes: `META_SAM_URL`, `META_VOICE_URL`, `META_IMAGE_URL`, `BASETEN_API_URL`.
 
 ## Repo contents
 

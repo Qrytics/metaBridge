@@ -94,9 +94,11 @@ async def transfer_file(file: UploadFile, transform: str = "none", land: int = 0
 
 @app.post("/membrane/sam-rip")
 def sam_rip(body: SamRipBody) -> dict:
-    if membrane.is_dev():
-        return membrane.sam_rip_fallback(body.prompt)
-    return membrane.sam_rip_fallback(body.prompt)  # prod wiring point
+    if not membrane.is_dev():
+        live = membrane.sam_rip_live(body.image_b64, body.prompt, body.point)
+        if live:
+            return live
+    return membrane.sam_rip_fallback(body.prompt)
 
 
 @app.post("/membrane/voice-command")
@@ -106,6 +108,10 @@ async def voice_command(request: Request) -> dict:
     body = await request.body()
     if not body:
         return {"transcript": "", "action": "none", "model": membrane.VOICE_MODEL}
+    if not membrane.is_dev():
+        live = membrane.voice_command_live(body)
+        if live:
+            return live
     return membrane.voice_fallback(body)
 
 
@@ -132,7 +138,14 @@ async def voice_command_raw(request: Request) -> dict:
                 converted = p.stdout
         except Exception:
             converted = None
-    out = membrane.voice_fallback(converted or body)
+    audio = converted or body
+    if not membrane.is_dev():
+        live = membrane.voice_command_live(audio)
+        if live:
+            live["received_bytes"] = len(body)
+            live["normalized"] = converted is not None
+            return live
+    out = membrane.voice_fallback(audio)
     out["received_bytes"] = len(body)
     out["normalized"] = converted is not None
     return out
@@ -156,6 +169,10 @@ async def input_event(request: Request) -> dict:
 
 @app.post("/membrane/restyle-asset")
 def restyle_asset(body: RestyleBody) -> dict:
+    if not membrane.is_dev():
+        live = membrane.restyle_live(body.image_b64, body.style)
+        if live:
+            return live
     return membrane.restyle_fallback(body.image_b64, body.style)
 
 
