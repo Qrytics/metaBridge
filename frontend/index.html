@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MetaBridge — Dual-Viewport Portal</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div class="brand">METABRIDGE <span>// NEURAL BEZEL</span></div>
+      <div class="metric"><span class="k">FPS </span><b id="m-fps">60</b></div>
+      <div class="metric"><span class="k">LATENCY_MS </span><b id="m-lat">1.2</b></div>
+      <div class="metric"><span class="k">STRADDLE_OFFSET_PX </span><b id="m-straddle">0</b></div>
+      <div class="metric">
+        <span class="k">CURSOR_OWNER </span><b id="owner-win" class="active">WIN</b> | <b id="owner-mac">MAC</b>
+      </div>
+      <div class="metric"><span class="k">MODE </span><b id="m-mode">SIM-DUAL</b></div>
+    </div>
+
+    <div id="stages">
+      <div class="viewport" id="vp-win">
+        <header><span>WIN · LEFT · HOST</span><span id="win-geom"></span></header>
+        <canvas id="cv-win" width="960" height="600"></canvas>
+      </div>
+      <div id="bezel-strip" title="Neural bezel"><div class="lbl">BEZEL</div></div>
+      <div class="viewport" id="vp-mac">
+        <header><span>MAC · RIGHT · CLIENT</span><span id="mac-geom"></span></header>
+        <canvas id="cv-mac" width="960" height="600"></canvas>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div class="ctl">
+        <label for="drag">WIN_X drag</label>
+        <input id="drag" type="range" min="0" max="1400" value="700" />
+      </div>
+      <div class="ctl"><button id="btn-shot">Teleport frame to Mac</button></div>
+      <div class="ctl"><button id="btn-sam" class="ghost">SAM rip: boss</button></div>
+      <div class="ctl"><button id="btn-xfer" class="ghost">Bezel transfer .sh → .ps1</button></div>
+      <div class="ctl"><button id="btn-voice" class="ghost">Voice cmd</button></div>
+    </div>
+    <div id="log" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
