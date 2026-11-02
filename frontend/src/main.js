@@ -1,6 +1,6 @@
 import { cursorOwner, dragHandoff, springStep, straddleView, viewportToFrame } from './bezel.js';
 import { createGame, hitSlime, mineAt, placeAt, renderGame, stepGame, tileName, WORLD_H, WORLD_W } from './game.js';
-import { decodeB64, restyleAsset, samRip, transferFile, voiceCommand } from './membrane.js';
+import { decodeB64, restyleAsset, samRip, transferFile, voiceCommand, voiceCommandRaw } from './membrane.js';
 
 // --- Global desktop geometry (canvas px = global units) ----------------------
 const W_LEFT = 960;
@@ -179,7 +179,9 @@ function onUp(canvas, isRight, ev) {
     samRipAt(wx, wy, gx, gy, macSide);
     return;
   }
-  if (downBtn === 2 || ev.button === 2) {
+  const btn = downBtn === 2 || ev.button === 2 ? 2 : 0;
+  forwardInput('click', { button: btn, gx: Math.round(wx), gy: Math.round(wy), sam: samMode || downAlt || ev.altKey });
+  if (btn === 2) {
     if (placeAt(game, wx, wy)) {
       if (macSide) tunnel(`PLACE (${Math.round(wx)},${Math.round(wy)})`);
       else log(`place ${tileName(game.selected)} @(${Math.round(wx)},${Math.round(wy)})`);
@@ -241,13 +243,17 @@ window.addEventListener('keydown', (ev) => {
   if (k in KEYMAP && KEYMAP[k]) {
     if (!keys[KEYMAP[k]] && owner === 'MAC') tunnel(`KEY_${ev.key.toUpperCase()} down`);
     keys[KEYMAP[k]] = true;
+    forwardInput('key', { key: k, down: true });
     if ([' ', 'arrowup'].includes(k)) ev.preventDefault();
   }
   if (k === 's' || k === 'arrowdown') { if (owner === 'MAC') tunnel('KEY_S down'); }
 });
 window.addEventListener('keyup', (ev) => {
   const k = ev.key.toLowerCase();
-  if (k in KEYMAP && KEYMAP[k]) keys[KEYMAP[k]] = false;
+  if (k in KEYMAP && KEYMAP[k]) {
+    keys[KEYMAP[k]] = false;
+    forwardInput('key', { key: k, down: false });
+  }
 });
 
 // --- Desktop file icons + cross-bezel transpile ------------------------------
@@ -306,6 +312,7 @@ function startIconDrag(ev, f, el) {
       try {
         const res = await transferFile(f.name, f.content, transform);
         const text = decodeB64(res.content_b64);
+        if (res.landed_path) log(`landed on disk: ${res.landed_path}`);
         addMacFile(res.target_name || (f.name + '.sh'), text);
         openModal(f.name, f.content, res.target_name, text,
           `critic=${res.ok ? 'PASS' : 'FAIL'} retries=${res.retries} :: ${res.notes}`);
@@ -472,10 +479,116 @@ async function voiceAction(target, label) {
     setTimeout(() => btnMic.classList.remove('live'), 900);
   }
 }
-btnMic.onclick = () => voiceAction(W_LEFT + 120, 'teleport-to-mac+screenshot');
+btnMic.onclick = () => micTap();
 document.getElementById('btn-v50').onclick = () => voiceAction(W_LEFT - WIN_W / 2, 'glide-50%-straddle');
 document.getElementById('btn-vmac').onclick = () => voiceAction(W_LEFT + 120, 'teleport-to-mac');
 document.getElementById('btn-vwin').onclick = () => voiceAction(200, 'back-to-win');
+
+async function micTap() {
+  // Real mic path: record ~2s, POST raw audio for FFmpeg normalization.
+  // Falls back to the canned command when mic/bridge is unavailable.
+  btnMic.classList.add('live');
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('no-mic-api');
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const rec = new MediaRecorder(stream);
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const done = new Promise((res) => { rec.onstop = res; });
+    rec.start();
+    log('mic recording... (2s)');
+    setTimeout(() => rec.stop(), 2000);
+    await done;
+    stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+    const res = await voiceCommandRaw(blob);
+    log(`voice "${res.transcript}" -> action=${res.action} (normalized=${res.normalized})`);
+    if ((res.action || '').includes('mac')) springTarget = W_LEFT + 120;
+    else if ((res.action || '').includes('50%') || (res.action || '').includes('straddle')) springTarget = W_LEFT - WIN_W / 2;
+    else springTarget = W_LEFT + 120;
+  } catch (err) {
+    await voiceAction(W_LEFT + 120, 'teleport-to-mac+screenshot');
+  } finally {
+    setTimeout(() => btnMic.classList.remove('live'), 900);
+  }
+}
+
+// --- Bridge input link: 120Hz-class event forwarding + RTT latency ------------
+let inputWS = null, rttMs = null, inputLinkOK = false;
+function inputLink() {
+  try {
+    inputWS = new WebSocket(bridgeBase().replace(/^http/, 'ws') + '/ws/input');
+  } catch { inputWS = null; return; }
+  inputWS.onopen = () => { inputLinkOK = true; log('input link up (WS /ws/input)'); };
+  inputWS.onclose = () => {
+    inputLinkOK = false; inputWS = null;
+    setTimeout(inputLink, 2000); // reconnect backoff
+  };
+  inputWS.onerror = () => { try { inputWS.close(); } catch { /* noop */ } };
+  inputWS.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(ev.data);
+      if (m.pong !== undefined) rttMs = Math.max(1, Math.round(performance.now() - m.pong));
+    } catch { /* binary/owner acks ignored */ }
+  };
+  setInterval(() => {
+    if (inputWS && inputWS.readyState === 1) inputWS.send(JSON.stringify({ ping: performance.now() }));
+  }, 2000);
+}
+inputLink();
+function forwardInput(kind, extra = {}) {
+  if (inputWS && inputWS.readyState === 1) {
+    try {
+      inputWS.send(JSON.stringify({
+        kind, cx: Math.round(cursorGX), cy: Math.round(cursorGY),
+        w_left: W_LEFT, owner, keys: Object.keys(keys).filter((k) => keys[k]),
+        ...extra, ts: performance.now(),
+      }));
+    } catch { /* link flap: game stays local */ }
+  }
+}
+
+// --- Real OS file drop: drag files from Finder/Explorer onto a desktop -------
+function mountOSDrop() {
+  const overlay = document.createElement('div');
+  overlay.id = 'osdrop';
+  overlay.textContent = 'DROP OS FILE TO BEZEL-TRANSFER';
+  document.getElementById('stages').appendChild(overlay);
+  let depth = 0;
+  window.addEventListener('dragenter', (e) => {
+    if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+    depth++;
+    overlay.classList.add('show');
+  });
+  window.addEventListener('dragleave', () => {
+    if (--depth <= 0) { depth = 0; overlay.classList.remove('show'); }
+  });
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    depth = 0;
+    overlay.classList.remove('show');
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.length) return;
+    const gx = globalXFromClient(e.clientX);
+    for (const file of files) {
+      const text = await file.text().catch(() => '');
+      const transform = transformFor(file.name);
+      const crossed = (gx >= W_LEFT) ? 'WIN-side drop' : 'local drop';
+      log(`OS file: ${file.name} (${file.size}B) -> ${crossed} (${transform})`);
+      try {
+        const res = await transferFile(file.name, text, transform);
+        const out = decodeB64(res.content_b64);
+        addMacFile(res.target_name, out);
+        openModal(file.name, text.slice(0, 4000), res.target_name, out.slice(0, 4000),
+          `critic=${res.ok ? 'PASS' : 'FAIL'} retries=${res.retries} :: ${res.notes}${res.landed_path ? ' :: ' + res.landed_path : ''}`);
+      } catch (err) {
+        log(`OS transfer !! ${err}`);
+      }
+    }
+  });
+}
+mountOSDrop();
 
 // --- Render loop: one shared buffer, two clipped viewports -----------------------
 dragSlider.addEventListener('input', () => { winX = Number(dragSlider.value); });
@@ -527,7 +640,8 @@ function frame() {
   document.getElementById('owner-win').classList.toggle('active', owner === 'WIN');
   document.getElementById('owner-mac').classList.toggle('active', owner === 'MAC');
   document.getElementById('m-lat').textContent =
-    source === 'agent' && lastFrameAt ? `${Math.max(1, Math.round(performance.now() - lastFrameAt))}.0` : '1.2';
+    rttMs !== null ? `${rttMs}.0`
+    : source === 'agent' && lastFrameAt ? `${Math.max(1, Math.round(performance.now() - lastFrameAt))}.0` : '1.2';
   if (document.activeElement !== dragSlider) dragSlider.value = String(Math.round(winX));
   if (!dragging) setOwner(cursorGX);
   strip.classList.toggle('lit', winX > W_LEFT - 30 || v.straddling || performance.now() - bezelFlashT < 400);

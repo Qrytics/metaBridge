@@ -32,8 +32,22 @@ _state = {
     "straddle_offset_px": 0,
     "fps": 60,
     "latency_ms": 1.2,
+    "viewers": 0,
+    "last_input_ts": 0.0,
     "started_at": time.time(),
 }
+
+_last_input: dict = {}
+
+
+def inbox_dir() -> str:
+    import os
+
+    d = os.environ.get("METABRIDGE_INBOX") or os.path.join(
+        os.path.expanduser("~"), "MetaBridge-Inbox"
+    )
+    os.makedirs(d, exist_ok=True)
+    return d
 _viewport_subs: set[WebSocket] = set()
 _input_history: deque = deque(maxlen=240)  # ~2s @120Hz
 
@@ -60,9 +74,21 @@ def state() -> dict:
 
 
 @app.post("/membrane/transfer-file")
-async def transfer_file(file: UploadFile, transform: str = "none") -> dict:
+async def transfer_file(file: UploadFile, transform: str = "none", land: int = 0) -> dict:
     content = await file.read()
     result = membrane.transpile_with_critic(file.filename or "upload.bin", content, transform)
+    if land:
+        import base64
+
+        raw = base64.b64decode(result["content_b64"])
+        dest = inbox_dir()
+        name = result["target_name"]
+        # Contain the landed file inside the inbox (no path traversal).
+        safe = "".join(c for c in name if c.isalnum() or c in "._-") or "upload.bin"
+        path = f"{dest}/{safe}"
+        with open(path, "wb") as f:
+            f.write(raw)
+        result["landed_path"] = path
     return result
 
 
@@ -81,6 +107,51 @@ async def voice_command(request: Request) -> dict:
     if not body:
         return {"transcript": "", "action": "none", "model": membrane.VOICE_MODEL}
     return membrane.voice_fallback(body)
+
+
+@app.post("/membrane/voice-command-raw")
+async def voice_command_raw(request: Request) -> dict:
+    """Mic path: accept any recorded audio (e.g. browser MediaRecorder),
+    transcode to 16kHz mono PCM WAV via FFmpeg when available, then run the
+    voice membrane. Dev fallback when FFmpeg is missing."""
+    import shutil
+    import subprocess
+
+    body = await request.body()
+    if not body:
+        return {"transcript": "", "action": "none", "model": membrane.VOICE_MODEL}
+    converted = None
+    if shutil.which("ffmpeg"):
+        try:
+            p = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+                 "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+                input=body, capture_output=True, timeout=20,
+            )
+            if p.returncode == 0 and p.stdout:
+                converted = p.stdout
+        except Exception:
+            converted = None
+    out = membrane.voice_fallback(converted or body)
+    out["received_bytes"] = len(body)
+    out["normalized"] = converted is not None
+    return out
+
+
+@app.post("/input/event")
+async def input_event(request: Request) -> dict:
+    """HTTP fallback for agent input telemetry (WS /ws/input preferred)."""
+    try:
+        event = await request.json()
+    except Exception:
+        event = {}
+    _last_input.clear()
+    _last_input.update(event if isinstance(event, dict) else {})
+    cx = int(_last_input.get("cx", 0))
+    w_left = int(_last_input.get("w_left", 1920))
+    _state["cursor_owner"] = bezel.cursor_owner(cx, w_left)
+    _state["last_input_ts"] = time.time()
+    return {"owner": _state["cursor_owner"]}
 
 
 @app.post("/membrane/restyle-asset")
@@ -140,11 +211,15 @@ async def ws_input(ws: WebSocket) -> None:
     try:
         while True:
             msg = await ws.receive_json()
+            if "ping" in msg:  # latency probe: echo for RTT measurement
+                await ws.send_json({"pong": msg["ping"], "server_ts": time.time()})
+                continue
             msg["server_ts"] = time.time()
             _input_history.append(msg)
             cx = int(msg.get("cx", 0))
             w_left = int(msg.get("w_left", 1920))
             _state["cursor_owner"] = bezel.cursor_owner(cx, w_left)
+            _state["last_input_ts"] = time.time()
             await ws.send_json({"owner": _state["cursor_owner"]})
     except WebSocketDisconnect:
         pass

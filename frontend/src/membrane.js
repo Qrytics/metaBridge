@@ -14,10 +14,10 @@ async function post(path, body, contentType = 'application/json') {
   return res.json();
 }
 
-export function transferFile(filename, text, transform) {
+export function transferFile(filename, text, transform, land = true) {
   const fd = new FormData();
   fd.append('file', new Blob([text], { type: 'text/plain' }), filename);
-  return fetch(`${bridgeBase()}/membrane/transfer-file?transform=${transform}`, {
+  return fetch(`${bridgeBase()}/membrane/transfer-file?transform=${transform}${land ? '&land=1' : ''}`, {
     method: 'POST',
     body: fd,
   }).then((r) => {
@@ -32,6 +32,10 @@ export function samRip(prompt, point, imageB64 = '') {
 
 export function voiceCommand(wavBytes) {
   return post('/membrane/voice-command', wavBytes, 'audio/wav');
+}
+
+export function voiceCommandRaw(blob) {
+  return post('/membrane/voice-command-raw', blob, blob.type || 'application/octet-stream');
 }
 
 export function restyleAsset(imageB64, style = 'concept-art-hd') {

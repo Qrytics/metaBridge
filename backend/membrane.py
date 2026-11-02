@@ -63,6 +63,71 @@ def is_dev() -> bool:
     return os.environ.get("ENV", "dev") != "prod"
 
 
+def _openai_chat(url: str, key: str, model: str, system: str, user: str) -> str | None:
+    """Minimal OpenAI-compatible chat call (Baseten / Meta Model API).
+
+    Returns the assistant text or None on any failure (caller falls back).
+    """
+    import json
+    import urllib.request
+
+    payload = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        url.rstrip("/") + "/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as res:
+            body = json.loads(res.read())
+        return body["choices"][0]["message"]["content"]
+    except Exception:
+        return None
+
+
+def _live_draft(filename: str, text: str, transform: str) -> str | None:
+    key = os.environ.get("BASETEN_API_KEY", "")
+    if not key:
+        return None
+    url = os.environ.get("BASETEN_API_URL", "https://inference.baseten.co/v1")
+    out = _openai_chat(
+        url, key, DRAFT_MODEL, TRANSPILER_SYSTEM,
+        f"filename={filename} transform={transform}\n```\n{text}\n```\n"
+        "Reply with ONLY the converted script, no fences.",
+    )
+    if not out:
+        return None
+    # Strip accidental fences.
+    lines = [ln for ln in out.splitlines() if not ln.strip().startswith("```")]
+    return "\n".join(lines).strip() + "\n"
+
+
+def _live_critic_fix(draft: str, issues: list[str], flavor: str) -> str | None:
+    key = os.environ.get("META_API_KEY", "")
+    if not key:
+        return None
+    url = os.environ.get("META_API_URL", "https://api.meta.ai/v1")
+    out = _openai_chat(
+        url, key, CRITIC_MODEL, CRITIC_SYSTEM,
+        f"flavor={flavor} issues={','.join(issues)}\n```\n{draft}\n```\n"
+        "Reply with ONLY the fixed script, no fences.",
+    )
+    if not out:
+        return None
+    lines = [ln for ln in out.splitlines() if not ln.strip().startswith("```")]
+    return "\n".join(lines).strip() + "\n"
+
+
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
@@ -207,7 +272,8 @@ def critic_verify(filename: str, draft: str, transform: str) -> dict:
     current, retries, fixed = draft, 0, False
     issues = validate_shell(current, flavor)
     while issues and retries < MAX_CRITIC_RETRIES:
-        current = _auto_fix(current, flavor)
+        live = None if is_dev() else _live_critic_fix(current, issues, flavor)
+        current = live if live else _auto_fix(current, flavor)
         fixed = True
         retries += 1
         issues = validate_shell(current, flavor)
@@ -229,10 +295,11 @@ def critic_verify(filename: str, draft: str, transform: str) -> dict:
 def transpile_with_critic(filename: str, content: bytes, transform: str) -> dict:
     """Draft (Spark) + critic (Wonder, <=3 retries). Dev = local rewrite."""
     text = content.decode("utf-8", errors="replace")
+    live_draft = None if is_dev() else _live_draft(filename, text, transform)
     if transform == "sh-to-ps1":
-        draft = sh_to_ps1(text)
+        draft = live_draft or sh_to_ps1(text)
     elif transform in ("ps1-to-sh", "bat-to-sh"):
-        draft = ps1_to_sh(text)
+        draft = live_draft or ps1_to_sh(text)
     elif transform in ("none", "config-normalize"):
         return {
             "target_name": filename,

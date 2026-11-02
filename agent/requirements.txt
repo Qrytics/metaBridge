@@ -2,5 +2,7 @@ pynput>=1.7
 mss>=9.0
 Pillow>=10.0
 websockets>=12.0
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pywin32>=306; sys_platform == "win32"
 # Windows-only GPU capture (install on host node):
 # dxcam>=0.0.5

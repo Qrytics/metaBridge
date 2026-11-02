@@ -109,7 +109,33 @@ Sleek hardware-KVM + Neural Bezel HUD: `border-radius: 0` everywhere, square cor
   asserts `STRADDLE_OFFSET_PX` updates, both canvases non-blank, zero console
   errors.
 
-## 8. Agent working agreements
+## 8. Stage 3 — demo path + hardening (macOS host, landing, launcher)
+
+- **Either OS hosts.** `agent/host_node.py` runs on the mouse/keyboard + game
+  machine (macOS or Windows): `find_window_region` follows the live Terraria
+  window (win32gui / Quartz, graceful None), `publish_loop` streams frames,
+  `InputAgent.stream_loop` publishes 120Hz (WS `/ws/input`, HTTP
+  `POST /input/event` fallback, 1s reconnect backoff). macOS needs Screen
+  Recording + Accessibility; without them the agent logs SYNTHETIC.
+- **File landing.** `POST /membrane/transfer-file?land=1` writes the converted
+  file to `~/MetaBridge-Inbox` (`METABRIDGE_INBOX` overrides, traversal-safe)
+  and returns `landed_path`; portal logs it + shows it in the inspector modal.
+  Real Finder/Explorer drops land via the `#osdrop` overlay (same pipeline).
+- **Prod models.** `ENV=prod` + `BASETEN_API_KEY`/`META_API_KEY` (+ optional
+  `*_API_URL`) switches the transpiler draft + Wonder critic fixes to live
+  OpenAI-compatible calls; any failure falls back to the deterministic
+  validator loop. Dev stays network-free.
+- **Mic.** Portal `[VOICE KVM MIC]` records ~2s via MediaRecorder and posts to
+  `POST /membrane/voice-command-raw` (FFmpeg-normalized to 16kHz mono WAV when
+  available); denial/unavailability falls back to the canned command.
+- **Latency.** Portal holds `WS /ws/input` with 2s ping probes; HUD shows
+  measured RTT (`/ws/input` echoes `pong`). All clicks/keys also forward as
+  events; the game stays locally playable on link flap.
+- **Launcher.** `bridge-node/start.py` = bridge + host agent + static portal
+  per machine; `start-mac.sh` / `start-win.ps1` build venvs and print the LAN
+  IP for the peer. `frontend/dist`, `.venv`, `node_modules` never committed.
+
+## 9. Agent working agreements
 
 - Keep bezel math in sync across `backend/bezel.py` ↔ `frontend/src/bezel.js`; change both + both test files together.
 - Membrane routers stay thin; model calls isolated in `backend/membrane.py` provider functions for easy mocking.

@@ -82,11 +82,63 @@ def _to_jpeg(img, quality: int = 75) -> bytes:
     return buf.getvalue()
 
 
+def find_window_region(title_substr: str) -> dict | None:
+    """Best-effort OS window lookup for a live game window (e.g. Terraria).
+
+    Windows: win32gui title match. macOS: Quartz window list title match
+    (needs Screen Recording permission for the pixels, not the list).
+    Returns an mss-style region or None when the APIs are unavailable.
+    """
+    import sys
+
+    needle = title_substr.lower()
+    try:
+        if sys.platform.startswith("win"):
+            import win32gui  # type: ignore
+
+            found: dict = {}
+
+            def _cb(hwnd, _):
+                if win32gui.IsWindowVisible(hwnd):
+                    name = win32gui.GetWindowText(hwnd) or ""
+                    if needle in name.lower():
+                        l, t, r, b = win32gui.GetWindowRect(hwnd)
+                        if r - l > 50 and b - t > 50:
+                            found.update(left=l, top=t, width=r - l, height=b - t)
+
+            win32gui.EnumWindows(_cb, None)
+            return found or None
+        if sys.platform == "darwin":
+            from Quartz import (  # type: ignore
+                CGWindowListCopyWindowInfo,
+                kCGNullWindowID,
+                kCGWindowListOptionOnScreenOnly,
+            )
+
+            for w in CGWindowListCopyWindowInfo(
+                kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+            ):
+                name = str(w.get("kCGWindowName", "") or "")
+                if needle in name.lower():
+                    b = w.get("kCGBounds", {})
+                    if b.get("Width", 0) > 50 and b.get("Height", 0) > 50:
+                        return {
+                            "left": int(b.get("X", 0)),
+                            "top": int(b.get("Y", 0)),
+                            "width": int(b.get("Width", 0)),
+                            "height": int(b.get("Height", 0)),
+                        }
+    except Exception:
+        pass
+    return None
+
+
 def publish_loop(
     url: str = "http://localhost:8000/viewport/frame",
     region: dict | None = None,
     fps: float = 30.0,
     duration: float | None = None,
+    title: str | None = None,
 ) -> int:
     """Stream JPEG frames to the bridge (stdlib HTTP, no extra deps).
 
@@ -97,7 +149,12 @@ def publish_loop(
 
     period = 1.0 / max(1.0, fps)
     sent, start = 0, _time.time()
+    retarget_at = 0.0
     while True:
+        if title and _time.time() >= retarget_at:
+            # Re-resolve the live game window every 5s (it moves/resizes).
+            region = find_window_region(title) or region
+            retarget_at = _time.time() + 5.0
         frame = capture_window_once(region)
         req = urllib.request.Request(
             url, data=frame, headers={"Content-Type": "image/jpeg"}, method="POST"
@@ -120,6 +177,7 @@ if __name__ == "__main__":  # python -m agent.capture [--url ...] [--fps 30]
     _p = argparse.ArgumentParser()
     _p.add_argument("--url", default="http://localhost:8000/viewport/frame")
     _p.add_argument("--fps", type=float, default=30.0)
+    _p.add_argument("--title", default=None, help="live game window title to follow (e.g. Terraria)")
     _a = _p.parse_args()
     print(f"publishing to {_a.url} ...")
-    publish_loop(url=_a.url, fps=_a.fps)
+    publish_loop(url=_a.url, fps=_a.fps, title=_a.title)

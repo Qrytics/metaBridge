@@ -49,18 +49,37 @@ body {
 #owner-mac.active { color: var(--mac); font-weight: 700; }
 
 #stages {
-  display: grid;
-  grid-template-columns: 1fr 26px 1fr;
+  position: relative;
+  display: flex;
   gap: 0;
   height: calc(100vh - 150px);
   min-height: 420px;
 }
+
+#osdrop {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(86, 214, 120, 0.12);
+  border: 2px dashed var(--sig);
+  color: var(--sig);
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  z-index: 30;
+  pointer-events: none;
+}
+#osdrop.show { display: flex; }
 
 .viewport {
   position: relative;
   background: #05070a;
   overflow: hidden;
   border-right: 1px solid var(--line);
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .viewport header {
@@ -75,13 +94,19 @@ body {
   z-index: 3;
 }
 
-.viewport canvas { width: 100%; height: 100%; display: block; }
+.viewport canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 960 / 600;
+  display: block;
+}
 
 #bezel-strip {
   background: #0c0f14;
   border-left: 1px solid var(--line);
   border-right: 1px solid var(--line);
   position: relative;
+  flex: 0 0 26px;
 }
 
 #bezel-strip.lit {
