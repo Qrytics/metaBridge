@@ -8,54 +8,42 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="MetaBridge Cast" />
-    <meta name="theme-color" content="#0a0c10" />
+    <meta name="theme-color" content="#070a0f" />
+    <meta name="description" content="MetaBridge portal: drag a live window across the Windows/Mac bezel, tunnel input both ways, and run AI membrane ops at the border." />
     <title>MetaBridge — Dual-Viewport Portal</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="hud">
       <div class="brand">METABRIDGE <span>// NEURAL BEZEL</span></div>
-      <div class="metric"><span class="k">FPS </span><b id="m-fps">60</b></div>
-      <div class="metric"><span class="k">LATENCY_MS </span><b id="m-lat">1.2</b></div>
-      <div class="metric"><span class="k">STRADDLE_OFFSET_PX </span><b id="m-straddle">0</b></div>
-      <div class="metric">
-        <span class="k">CURSOR_OWNER </span><b id="owner-win" class="active">WIN</b> | <b id="owner-mac">MAC</b>
-      </div>
-      <div class="metric"><span class="k">MODE </span><b id="m-mode">SIM-DUAL</b></div>
-      <div class="metric"><span class="k">MEMBRANE </span><b id="m-mem">DEV</b></div>
-      <div class="metric"><button id="btn-span" class="ghostbtn">SPAN BOTH SCREENS</button></div>
-      <div class="metric"><button id="btn-project" class="ghostbtn">PROJECT ON DESKTOP</button></div>
-      <div class="metric seg">
-        <span class="k">SRC </span>
-        <button id="src-sandbox" class="segbtn active">PLAYABLE_TERRARIA_SANDBOX</button><button id="src-agent" class="segbtn">LIVE_AGENT_STREAM</button>
-      </div>
-      <div class="metric"><button id="btn-sam-mode" class="ghostbtn">SAM 3.1 RIP MODE: OFF</button></div>
-      <div class="metric"><button id="btn-mic" class="ghostbtn">VOICE KVM MIC</button></div>
+      <div class="stat hero"><span class="k">STRADDLE_OFFSET_PX</span><b id="m-straddle">0</b></div>
+      <div class="stat"><span class="k">FPS</span><b id="m-fps">60</b></div>
+      <div class="stat"><span class="k">LATENCY_MS</span><b id="m-lat">1.2</b></div>
+      <div class="stat"><span class="k">CURSOR_OWNER</span><span class="owners"><b id="owner-win" class="active">WIN</b><b id="owner-mac">MAC</b></span></div>
+      <div class="stat"><span class="k">MODE</span><b id="m-mode">SIM-DUAL</b></div>
+      <div class="stat"><span class="k">MEMBRANE</span><b id="m-mem">DEV</b></div>
     </div>
 
     <div id="stages">
       <div class="viewport" id="vp-win">
         <header><span>WIN · LEFT · HOST</span><span id="win-geom"></span></header>
-        <canvas id="cv-win" width="960" height="600"></canvas>
+        <canvas id="cv-win" width="960" height="600" role="img" aria-label="Windows left viewport: live game window"></canvas>
         <div class="files" id="files-win"></div>
       </div>
-      <div id="bezel-strip" title="Neural membrane"><div class="lbl">BEZEL</div></div>
+      <div id="bezel-strip" title="Neural membrane"><div class="lbl">BEZEL</div><div class="val" id="bezel-val">0</div></div>
       <div class="viewport" id="vp-mac">
         <header><span>MAC · RIGHT · CLIENT</span><span id="mac-geom"></span></header>
-        <canvas id="cv-mac" width="960" height="600"></canvas>
+        <canvas id="cv-mac" width="960" height="600" role="img" aria-label="Mac right viewport: straddled overflow"></canvas>
         <div class="files" id="files-mac"></div>
       </div>
     </div>
 
     <div id="controls">
-      <div class="ctl">
-        <label for="drag">WIN_X debug</label>
-        <input id="drag" type="range" min="0" max="1440" value="240" />
-      </div>
-      <div class="ctl"><button id="btn-v50">VOICE: 50% straddle</button></div>
-      <div class="ctl"><button id="btn-vmac" class="ghost">VOICE: teleport to Mac</button></div>
-      <div class="ctl"><button id="btn-vwin" class="ghost">VOICE: back to Win</button></div>
-      <div class="ctl"><span class="hint">drag title bar · A/D move · W/Space jump · click mine · right-click place · 1-5 select · Alt+click SAM rip</span></div>
+      <div class="deck-group"><span class="deck-label">SOURCE</span><span class="seg"><button id="src-sandbox" class="segbtn active">SANDBOX</button><button id="src-agent" class="segbtn">LIVE AGENT</button></span></div>
+      <div class="deck-group"><span class="deck-label">VIEW</span><button id="btn-span" class="ghostbtn">SPAN BOTH SCREENS</button><button id="btn-project" class="ghostbtn">PROJECT ON DESKTOP</button></div>
+      <div class="deck-group"><span class="deck-label">WINDOW</span><label class="winlabel" for="drag">WIN_X</label><input id="drag" type="range" min="0" max="1440" value="240" /></div>
+      <div class="deck-group"><span class="deck-label">VOICE / RIP</span><button id="btn-v50" class="ghostbtn">VOICE: 50%</button><button id="btn-vmac" class="ghostbtn">VOICE: to Mac</button><button id="btn-vwin" class="ghostbtn">VOICE: to Win</button><button id="btn-mic" class="ghostbtn">KVM MIC</button><button id="btn-sam-mode" class="ghostbtn">SAM 3.1 RIP: OFF</button></div>
+      <div class="deck-foot"><span class="hint">drag title bar · A/D move · W/Space jump · click mine · right-click place · 1-5 select · Alt+click SAM rip</span></div>
     </div>
     <div id="log" aria-live="polite"></div>
 

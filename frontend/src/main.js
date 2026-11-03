@@ -445,7 +445,7 @@ function flashBezel(strong = false) {
 const btnSamMode = document.getElementById('btn-sam-mode');
 function setSamMode(on) {
   samMode = on;
-  btnSamMode.textContent = `SAM 3.1 RIP MODE: ${on ? 'ON' : 'OFF'}`;
+  btnSamMode.textContent = `SAM 3.1 RIP: ${on ? 'ON' : 'OFF'}`;
   btnSamMode.classList.toggle('armed', on);
   log(`sam-3.1 rip mode ${on ? 'ARMED' : 'off'} — Alt+click also rips`);
 }
@@ -478,7 +478,7 @@ function setMode(next) {
   carryPlayer(mode === 'span' ? spanGame : game, next === 'span' ? spanGame : game);
   mode = next;
   const span = mode === 'span';
-  btnSpan.textContent = span ? 'SPAN: ON (BOTH SCREENS)' : 'SPAN BOTH SCREENS';
+  btnSpan.textContent = span ? 'SPAN: ON' : 'SPAN BOTH SCREENS';
   btnSpan.classList.toggle('armed', span);
   dragSlider.disabled = span;
   dragging = false;
@@ -836,6 +836,7 @@ function drawSpanFrame() {
   else ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
   ctxMac.drawImage(spanCanvas, W_LEFT, 0, W_RIGHT, 600, 0, 0, W_RIGHT, 600);
   document.getElementById('m-straddle').textContent = '1920';
+  document.getElementById('bezel-val').textContent = '1920';
   document.getElementById('win-geom').textContent = 'SPAN left 960px live';
   document.getElementById('mac-geom').textContent = 'SPAN right 960px live';
   strip.classList.add('lit');
@@ -870,6 +871,7 @@ function frame() {
   const v = straddleView(Math.round(winX), Math.round(winY), WIN_W, WIN_H, W_LEFT);
 
   document.getElementById('m-straddle').textContent = String(v.straddleOffsetPx);
+  document.getElementById('bezel-val').textContent = String(v.straddleOffsetPx);
   document.getElementById('owner-win').classList.toggle('active', owner === 'WIN');
   document.getElementById('owner-mac').classList.toggle('active', owner === 'MAC');
   document.getElementById('m-lat').textContent =
