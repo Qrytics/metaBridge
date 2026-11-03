@@ -1,3 +1,5 @@
+import '@fontsource-variable/schibsted-grotesk/index.css';
+import '@fontsource-variable/martian-mono/wdth.css';
 import { cursorOwner, dragHandoff, SPAN_W, SPAN_WORLD_COLS, spanCamX, spanGlobalToWorld, springStep, straddleView, viewportToFrame, fitScale } from './bezel.js';
 import { createGame, hitSlime, mineAt, placeAt, renderGame, skyColor, stepGame, tileName, WORLD_H, WORLD_W } from './game.js';
 import { decodeB64, restyleAsset, samRip, transferFile, voiceCommand, voiceCommandRaw } from './membrane.js';
@@ -19,7 +21,10 @@ const castMode = params.get('cast') === '1';
 document.getElementById('m-mode').textContent = simDual ? 'SIM-DUAL' : 'LINKED';
 // One-shot membrane badge: LIVE only when the bridge runs ENV=prod with keys.
 fetch(`${bridgeBase()}/state`).then((r) => r.json()).then((s) => {
-  document.getElementById('m-mem').textContent = s.membrane_mode === 'live' ? 'LIVE' : 'DEV';
+  const live = s.membrane_mode === 'live';
+  const mem = document.getElementById('m-mem');
+  mem.textContent = live ? 'LIVE' : 'DEV';
+  mem.dataset.live = String(live);
 }).catch(() => { /* bridge unreachable: stays DEV */ });
 
 const cvWin = document.getElementById('cv-win');
@@ -71,10 +76,15 @@ let frames = 0, lastFpsT = performance.now();
 
 function log(msg) {
   const line = document.createElement('div');
-  line.textContent = `[${new Date().toISOString().slice(11, 19)}] ${msg}`;
+  const stamp = new Date().toISOString().slice(11, 19);
+  const t = document.createElement('span'); t.textContent = stamp;
+  const m = document.createElement('span'); m.textContent = String(msg);
+  line.append(t, m);
+  if (String(msg).includes('!!')) line.className = 'err';
   logEl.prepend(line);
+  while (logEl.childElementCount > 120) logEl.lastElementChild.remove();
   const _dbg = (window.__dbg = window.__dbg || []);
-  _dbg.push(line.textContent);
+  _dbg.push(`[${stamp}] ${msg}`);
   if (_dbg.length > 200) _dbg.splice(0, _dbg.length - 200);
 }
 function tunnel(msg) { log(`MAC -> WIN INPUT TUNNEL: ${msg}`); }
@@ -127,6 +137,8 @@ function setSource(next) {
   source = next;
   btnSandbox.classList.toggle('active', next === 'sandbox');
   btnAgent.classList.toggle('active', next === 'agent');
+  btnSandbox.setAttribute('aria-pressed', String(next === 'sandbox'));
+  btnAgent.setAttribute('aria-pressed', String(next === 'agent'));
   log(`source -> ${next === 'sandbox' ? 'PLAYABLE_TERRARIA_SANDBOX' : 'LIVE_AGENT_STREAM'}`);
   if (next === 'agent') {
     connectAgentStream();
@@ -353,18 +365,19 @@ const FILE_DEFS = [
   { name: 'setup_mac_daemon.sh', kind: 'sh', side: 'mac', x: 20, y: 20,
     content: '#!/bin/sh\necho starting daemon\nexport APP_PORT=8080\necho ready\n' },
 ];
-const GLYPH = { ps1: '▤', bat: '▤', sh: '⬣', wld: '◈' };
+const GLYPH = { ps1: 'PS1', bat: 'BAT', sh: 'SH', wld: 'WLD' };
 function transformFor(name) {
   if (name.endsWith('.ps1')) return 'ps1-to-sh';
   if (name.endsWith('.bat')) return 'bat-to-sh';
   if (name.endsWith('.sh')) return 'sh-to-ps1';
   return 'none';
 }
+function breakName(name) { return name.replace(/_/g, '_<wbr>').replace(/\./g, '<wbr>.'); }
 function mountFiles() {
   for (const f of FILE_DEFS) {
     const el = document.createElement('div');
     el.className = `fileicon ${f.kind}`;
-    el.innerHTML = `<span class="glyph">${GLYPH[f.kind]}</span>${f.name}<small>${f.side === 'win' ? 'WIN desktop' : 'MAC desktop'}</small>`;
+    el.innerHTML = `<span class="glyph">${GLYPH[f.kind]}</span>${breakName(f.name)}`;
     el.style.left = `${f.x}px`; el.style.top = `${f.y}px`;
     el.addEventListener('pointerdown', (ev) => startIconDrag(ev, f, el));
     document.getElementById(f.side === 'win' ? 'files-win' : 'files-mac').appendChild(el);
@@ -417,15 +430,15 @@ function addMacFile(name, content) {
   const kind = name.endsWith('.sh') ? 'sh' : name.endsWith('.ps1') ? 'ps1' : 'wld';
   const el = document.createElement('div');
   el.className = `fileicon ${kind}`;
-  el.innerHTML = `<span class="glyph">${GLYPH[kind] || '◈'}</span>${name}<small>MAC desktop · converted</small>`;
+  el.innerHTML = `<span class="glyph">${GLYPH[kind] || 'FILE'}</span>${breakName(name)}<small>converted</small>`;
   el.style.left = `${40 + Math.random() * 120}px`; el.style.top = `${160 + Math.random() * 120}px`;
   const f = { name, kind, side: 'mac', content };
   el.addEventListener('pointerdown', (ev) => startIconDrag(ev, f, el));
   document.getElementById('files-mac').appendChild(el);
 }
 function openModal(aName, aText, bName, bText, notes) {
-  document.getElementById('diff-a-name').textContent = `BEFORE · ${aName}`;
-  document.getElementById('diff-b-name').textContent = `AFTER · ${bName}`;
+  document.getElementById('diff-a-name').textContent = `Before: ${aName}`;
+  document.getElementById('diff-b-name').textContent = `After: ${bName}`;
   document.getElementById('diff-a').textContent = aText;
   document.getElementById('diff-b').textContent = bText;
   document.getElementById('modal-notes').textContent = notes;
@@ -445,9 +458,10 @@ function flashBezel(strong = false) {
 const btnSamMode = document.getElementById('btn-sam-mode');
 function setSamMode(on) {
   samMode = on;
-  btnSamMode.textContent = `SAM 3.1 RIP: ${on ? 'ON' : 'OFF'}`;
+  btnSamMode.textContent = `SAM 3.1 rip: ${on ? 'on' : 'off'}`;
   btnSamMode.classList.toggle('armed', on);
-  log(`sam-3.1 rip mode ${on ? 'ARMED' : 'off'} — Alt+click also rips`);
+  btnSamMode.setAttribute('aria-pressed', String(on));
+  log(`sam-3.1 rip mode ${on ? 'ARMED' : 'off'} (Alt+click also rips)`);
 }
 btnSamMode.onclick = () => setSamMode(!samMode);
 
@@ -478,11 +492,12 @@ function setMode(next) {
   carryPlayer(mode === 'span' ? spanGame : game, next === 'span' ? spanGame : game);
   mode = next;
   const span = mode === 'span';
-  btnSpan.textContent = span ? 'SPAN: ON' : 'SPAN BOTH SCREENS';
+  btnSpan.textContent = span ? 'Span: on' : 'Span both screens';
   btnSpan.classList.toggle('armed', span);
+  btnSpan.setAttribute('aria-pressed', String(span));
   dragSlider.disabled = span;
   dragging = false;
-  log(span ? 'SPAN mode: 1920px world 1:1 across WIN+MAC — one Terraria, two screens'
+  log(span ? 'SPAN mode: 1920px world 1:1 across WIN+MAC: one Terraria, two screens'
     : 'window mode: floating game window is back');
 }
 btnSpan.onclick = () => setMode(mode === 'span' ? 'window' : 'span');
@@ -492,8 +507,9 @@ let projecting = false;
 const btnProject = document.getElementById('btn-project');
 function setProjecting(on) {
   projecting = on;
-  btnProject.textContent = on ? 'PROJECTION: ON (DESKTOP)' : 'PROJECT ON DESKTOP';
+  btnProject.textContent = on ? 'Projection: on' : 'Project on desktop';
   btnProject.classList.toggle('armed', on);
+  btnProject.setAttribute('aria-pressed', String(on));
   log(on ? 'projection ON: game sky replaced by the computer desktops'
     : 'projection off: game sky restored');
 }
@@ -510,7 +526,7 @@ function downscaledFrame(src, maxEdge) {
 }
 let samBusy = false; // one rip at a time: each live call costs vision tokens
 async function samRipAt(g, srcCanvas, wx, wy, gx, gy, macSide) {
-  if (samBusy) { log('sam-3.1 rip !! still working — one at a time'); return; }
+  if (samBusy) { log('sam-3.1 rip !! still working, one at a time'); return; }
   samBusy = true;
   const [fx, fy] = viewportToFrame(wx, wy, 0, 0, source === 'agent' && agentCanvas.width ? 1 / agentScale : 1);
   const prompt = pickPrompt(g, wx, wy);
@@ -528,7 +544,7 @@ async function samRipAt(g, srcCanvas, wx, wy, gx, gy, macSide) {
     if (livePoly) log('sam-3.1 live mask received (model polygon)');
     rips.push({ fx: (x0 + x1) / 2 * srcCanvas.width, fy: (y0 + y1) / 2 * srcCanvas.height, prompt, poly });
     mintSpriteCard(srcCanvas, poly, prompt, gx, gy);
-    log(`sam-3.1 contour locked (${poly.length} pts) — drag the card across the bezel`);
+    log(`sam-3.1 contour locked (${poly.length} pts). Drag the card across the bezel.`);
     samBusy = false;
   } catch (err) {
     log(`sam-3.1 rip !! ${err}`);
@@ -602,10 +618,8 @@ function drawRipContours() {
   const ctx = mode === 'span' ? spanCtx : winCtx;
   const yBase = mode === 'span' ? SPAN_YOFF : TITLE_H;
   ctx.save();
-  ctx.strokeStyle = '#39ff88';
+  ctx.strokeStyle = '#ffcf3a';
   ctx.lineWidth = 2;
-  ctx.shadowColor = '#39ff88';
-  ctx.shadowBlur = 8;
   for (const rip of rips.slice(-3)) {
     ctx.beginPath();
     rip.poly.forEach(([x, y], i) => {
@@ -632,7 +646,7 @@ function voiceAction(target, label) {
     log(`voice (local) -> action=${label}`);
     springTarget = target;
   } catch (err) {
-    log(`voice !! ${err} — springing anyway (${label})`);
+    log(`voice !! ${err}. Springing anyway (${label})`);
     springTarget = target;
   } finally {
     setTimeout(() => btnMic.classList.remove('live'), 900);
@@ -774,21 +788,21 @@ if (castMode) {
 function drawWindowChrome() {
   if (projecting) winCtx.clearRect(0, 0, WIN_W, WIN_H);
   else {
-    winCtx.fillStyle = '#0b0e13';
+    winCtx.fillStyle = '#0c1112';
     winCtx.fillRect(0, 0, WIN_W, WIN_H);
   }
   // Title bar
-  winCtx.fillStyle = dragging ? '#17351f' : '#141a24';
+  winCtx.fillStyle = dragging ? '#2c3234' : '#1b2021';
   winCtx.fillRect(0, 0, WIN_W, TITLE_H);
-  winCtx.fillStyle = dragging ? '#56d678' : '#8a94a3';
+  winCtx.fillStyle = dragging ? '#f2efe8' : '#a39f94';
   winCtx.font = '11px monospace';
-  winCtx.fillText(`${TITLE} · ${source === 'sandbox' ? 'SANDBOX' : 'AGENT'}`, 8, 18);
-  winCtx.fillStyle = '#3a4354';
+  winCtx.fillText(`${TITLE} // ${source === 'sandbox' ? 'SANDBOX' : 'AGENT'}`, 8, 18);
+  winCtx.fillStyle = '#4a4f52';
   winCtx.fillRect(0, TITLE_H - 1, WIN_W, 1);
   // Content
   if (source === 'agent' && agentCanvas.width) {
     winCtx.drawImage(agentCanvas, 0, 0, agentCanvas.width, agentCanvas.height, 0, TITLE_H, WIN_W, WIN_H - TITLE_H); // 1:1 or fit, zero crop
-    winCtx.fillStyle = 'rgba(76,195,255,0.9)';
+    winCtx.fillStyle = '#e9e6dd';
     winCtx.font = '10px monospace';
     winCtx.fillText('LIVE_AGENT_STREAM', 8, TITLE_H + 16);
   } else {
@@ -798,7 +812,7 @@ function drawWindowChrome() {
     if (source === 'agent' && !agentCanvas.width) {
       winCtx.fillStyle = 'rgba(5,7,10,0.7)';
       winCtx.fillRect(0, TITLE_H, WIN_W, WIN_H - TITLE_H);
-      winCtx.fillStyle = '#8a94a3';
+      winCtx.fillStyle = '#a39f94';
       winCtx.font = '11px monospace';
       winCtx.fillText('waiting for agent frames on WS /ws/viewport ...', 24, TITLE_H + 60);
     }
@@ -816,7 +830,7 @@ function drawSpanFrame() {
   renderGame(spanCtx, spanGame, 0, SPAN_W, SPAN_YOFF, projecting ? { sky: false } : undefined);
   spanCtx.fillStyle = 'rgba(5,7,10,0.85)';
   spanCtx.fillRect(8, 8, 348, 20);
-  spanCtx.fillStyle = '#56d678';
+  spanCtx.fillStyle = '#e9e6dd';
   spanCtx.font = '11px monospace';
   spanCtx.fillText('TERRARIA.EXE // SPAN 1920px 1:1 // WIN + MAC', 14, 22);
   drawRipContours();
@@ -835,6 +849,7 @@ function drawSpanFrame() {
   if (projecting) paintWallpaper(ctxMac, cvMac.width, cvMac.height, 'mac');
   else ctxMac.clearRect(0, 0, cvMac.width, cvMac.height);
   ctxMac.drawImage(spanCanvas, W_LEFT, 0, W_RIGHT, 600, 0, 0, W_RIGHT, 600);
+  hint.textContent = 'One 1920 px world, split at the bezel';
   document.getElementById('m-straddle').textContent = '1920';
   document.getElementById('bezel-val').textContent = '1920';
   document.getElementById('win-geom').textContent = 'SPAN left 960px live';
@@ -843,7 +858,7 @@ function drawSpanFrame() {
   if (!simDual) {
     ctxMac.fillStyle = 'rgba(5,7,10,0.85)';
     ctxMac.fillRect(20, 556, 420, 22);
-    ctxMac.fillStyle = '#8a94a3';
+    ctxMac.fillStyle = '#a39f94';
     ctxMac.font = '12px monospace';
     ctxMac.fillText('SPAN LINKED: right half streams via WS /ws/viewport', 28, 571);
   }
@@ -870,6 +885,9 @@ function frame() {
   drawWindowChrome();
   const v = straddleView(Math.round(winX), Math.round(winY), WIN_W, WIN_H, W_LEFT);
 
+  hint.textContent = v.straddling
+    ? `${v.leftVisibleW} px on Windows, ${v.rightVisibleW} px on the Mac`
+    : (winX >= W_LEFT ? 'Window is entirely on the Mac' : 'Window is entirely on Windows');
   document.getElementById('m-straddle').textContent = String(v.straddleOffsetPx);
   document.getElementById('bezel-val').textContent = String(v.straddleOffsetPx);
   document.getElementById('owner-win').classList.toggle('active', owner === 'WIN');
@@ -905,7 +923,7 @@ function frame() {
     ctxMac.drawImage(winCanvas, v.macWinX, Math.round(winY));
     ctxMac.restore();
   } else if (!simDual) {
-    ctxMac.fillStyle = '#8a94a3';
+    ctxMac.fillStyle = '#a39f94';
     ctxMac.font = '12px monospace';
     ctxMac.fillText('LINKED MODE: stream via WS /ws/viewport', 20, 40);
   }
@@ -913,7 +931,25 @@ function frame() {
   finishFrame();
 }
 
+const hint = document.getElementById('m-hint');
+const rulerWin = document.getElementById('ruler-win');
+const rulerMac = document.getElementById('ruler-mac');
+function paintRuler(x0, x1) {
+  // Global desktop x runs 0..1920: left screen [0,960), right screen [960,1920).
+  const seg = (lo, hi) => {
+    const a = Math.max(x0, lo), b = Math.min(x1, hi);
+    return b > a ? [((a - lo) / (hi - lo)) * 100, ((b - a) / (hi - lo)) * 100] : [0, 0];
+  };
+  const [lw, ww] = seg(0, W_LEFT);
+  const [lm, wm] = seg(W_LEFT, W_LEFT + W_RIGHT);
+  rulerWin.style.left = `${lw}%`; rulerWin.style.width = `${ww}%`;
+  rulerMac.style.left = `${lm}%`; rulerMac.style.width = `${wm}%`;
+}
+
 function finishFrame() {
+  document.body.dataset.owner = owner;
+  if (mode === 'span') paintRuler(0, W_LEFT + W_RIGHT);
+  else paintRuler(winX, winX + WIN_W);
   // Cursor cross.
   const drawCursor = (ctx, x, y) => {
     ctx.strokeStyle = '#ffb224';
@@ -937,5 +973,5 @@ function finishFrame() {
 }
 
 requestAnimationFrame(frame);
-log(`portal up · sim-dual=${simDual} · drag the title bar across the bezel`);
+log(`portal up, sim-dual=${simDual}. Drag the title bar across the bezel.`);
 window.__metaBridge.game = game;
