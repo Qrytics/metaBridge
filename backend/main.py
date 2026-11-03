@@ -5,14 +5,16 @@ Sim-dual serves one process driving both viewports for local testing.
 """
 
 import argparse
+import os
 import time
 from collections import deque
 
 from fastapi import FastAPI, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import bezel, membrane
+from . import bezel, debug, membrane
 
 ROLE_WIN = "win"
 ROLE_MAC = "mac"
@@ -39,6 +41,10 @@ _state = {
 
 _last_input: dict = {}
 
+# Cost guards: bound per-call model spend (vision billed on pixels, STT on bytes).
+MAX_IMAGE_B64 = 2_500_000  # ~1.9MB decoded; portal downscales SAM frames to 768px
+MAX_VOICE_BYTES = 8_000_000  # mic sends ~2s clips (~64KB); this is generous headroom
+
 
 def inbox_dir() -> str:
     import os
@@ -48,8 +54,41 @@ def inbox_dir() -> str:
     )
     os.makedirs(d, exist_ok=True)
     return d
+# `bridge-node/start.py --sim-dual` sets BRIDGE_SIM_DUAL=1 for single-machine runs.
+_state["sim_dual"] = os.environ.get("BRIDGE_SIM_DUAL") == "1"
 _viewport_subs: set[WebSocket] = set()
 _input_history: deque = deque(maxlen=240)  # ~2s @120Hz
+
+
+class ClientNote(BaseModel):
+    hud: dict = Field(default_factory=dict)
+    log: list = Field(default_factory=list)
+    shot: str = ""
+
+
+@app.get("/debug/events")
+def debug_events(limit: int = 200) -> dict:
+    """Recent flight-recorder events (newest last)."""
+    return {"events": debug.recent(limit)}
+
+
+@app.post("/debug/client")
+async def debug_client(request: Request) -> dict:
+    """Portal telemetry: HUD + log tail + downscaled canvas shot."""
+    if int(request.headers.get("content-length") or 0) > 3_000_000:
+        return JSONResponse(status_code=413, content={"detail": "client note too large"})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"detail": "expected JSON"})
+    stored = debug.client_note(body.get("hud", {}), body.get("log", []), body.get("shot", ""))
+    return {"stored": stored}
+
+
+@app.get("/debug/bundle")
+def debug_bundle() -> FileResponse:
+    """Download everything: events, client notes, shots, frames, state."""
+    return FileResponse(debug.build_bundle(_state), filename="metabridge-debug-bundle.zip")
 
 
 class SamRipBody(BaseModel):
@@ -70,13 +109,16 @@ def health() -> dict:
 
 @app.get("/state")
 def state() -> dict:
-    return dict(_state)
+    info = dict(_state)
+    info["membrane_mode"] = "live" if not membrane.is_dev() else "dev"
+    return info
 
 
 @app.post("/membrane/transfer-file")
 async def transfer_file(file: UploadFile, transform: str = "none", land: int = 0) -> dict:
     content = await file.read()
     result = membrane.transpile_with_critic(file.filename or "upload.bin", content, transform)
+    debug.log_event("transfer", {"file": file.filename, "transform": transform, "bytes": len(content), "ok": result.get("ok"), "retries": result.get("retries"), "target": result.get("target_name")})
     if land:
         import base64
 
@@ -94,15 +136,22 @@ async def transfer_file(file: UploadFile, transform: str = "none", land: int = 0
 
 @app.post("/membrane/sam-rip")
 def sam_rip(body: SamRipBody) -> dict:
+    debug.log_event("sam-rip", {"prompt": body.prompt, "img_chars": len(body.image_b64)})
+    if len(body.image_b64) > MAX_IMAGE_B64:
+        return JSONResponse(status_code=413, content={"detail": "image_b64 too large; downscale client-side"})
     if not membrane.is_dev():
         live = membrane.sam_rip_live(body.image_b64, body.prompt, body.point)
         if live:
             return live
-    return membrane.sam_rip_fallback(body.prompt)
+    out = membrane.sam_rip_fallback(body.prompt)
+    debug.log_event("sam-rip-served", {"mode": "fallback", "bbox": out.get("bbox")})
+    return out
 
 
 @app.post("/membrane/voice-command")
 async def voice_command(request: Request) -> dict:
+    if int(request.headers.get("content-length") or 0) > MAX_VOICE_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "audio body too large"})
     # FFmpeg 16kHz mono PCM WAV precondition enforced by producer;
     # dev fallback validates non-empty and returns canned action.
     body = await request.body()
@@ -117,6 +166,8 @@ async def voice_command(request: Request) -> dict:
 
 @app.post("/membrane/voice-command-raw")
 async def voice_command_raw(request: Request) -> dict:
+    if int(request.headers.get("content-length") or 0) > MAX_VOICE_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "audio body too large"})
     """Mic path: accept any recorded audio (e.g. browser MediaRecorder),
     transcode to 16kHz mono PCM WAV via FFmpeg when available, then run the
     voice membrane. Dev fallback when FFmpeg is missing."""
@@ -164,16 +215,22 @@ async def input_event(request: Request) -> dict:
     w_left = int(_last_input.get("w_left", 1920))
     _state["cursor_owner"] = bezel.cursor_owner(cx, w_left)
     _state["last_input_ts"] = time.time()
+    debug.log_event("input", {"cx": cx, "owner": _state["cursor_owner"], "via": "http"})
     return {"owner": _state["cursor_owner"]}
 
 
 @app.post("/membrane/restyle-asset")
 def restyle_asset(body: RestyleBody) -> dict:
+    debug.log_event("restyle", {"style": body.style, "img_chars": len(body.image_b64)})
+    if len(body.image_b64) > MAX_IMAGE_B64:
+        return JSONResponse(status_code=413, content={"detail": "image_b64 too large; downscale client-side"})
     if not membrane.is_dev():
         live = membrane.restyle_live(body.image_b64, body.style)
         if live:
             return live
-    return membrane.restyle_fallback(body.image_b64, body.style)
+    out = membrane.restyle_fallback(body.image_b64, body.style)
+    debug.log_event("restyle-served", {"mode": "fallback"})
+    return out
 
 
 @app.websocket("/ws/viewport")
@@ -182,6 +239,7 @@ async def ws_viewport(ws: WebSocket) -> None:
     rebroadcast to every other subscriber; text frames get a tick reply."""
     await ws.accept()
     _viewport_subs.add(ws)
+    debug.log_event("viewport-sub", {"viewers": len(_viewport_subs)})
     _state["viewers"] = len(_viewport_subs)
     try:
         while True:
@@ -195,6 +253,7 @@ async def ws_viewport(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        debug.log_event("viewport-unsub", {"viewers": len(_viewport_subs)})
         _viewport_subs.discard(ws)
         _state["viewers"] = len(_viewport_subs)
 
@@ -218,6 +277,7 @@ async def viewport_frame(request: Request) -> dict:
     """HTTP publisher path for agent/capture.py::publish_loop."""
     body = await request.body()
     if body:
+        debug.note_frame(body)
         await broadcast_frame(body)
     return {"viewers": len(_viewport_subs), "bytes": len(body)}
 
@@ -236,6 +296,9 @@ async def ws_input(ws: WebSocket) -> None:
             cx = int(msg.get("cx", 0))
             w_left = int(msg.get("w_left", 1920))
             _state["cursor_owner"] = bezel.cursor_owner(cx, w_left)
+            if _state["cursor_owner"] != debug.get("ws_owner"):
+                debug.set("ws_owner", _state["cursor_owner"])
+                debug.log_event("owner", {"owner": _state["cursor_owner"], "cx": cx, "via": "ws"})
             _state["last_input_ts"] = time.time()
             await ws.send_json({"owner": _state["cursor_owner"]})
     except WebSocketDisconnect:

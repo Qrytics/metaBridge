@@ -15,6 +15,7 @@ deterministic local fallback with zero network traffic.
 import base64
 import os
 
+from . import debug
 from .bezel import MAX_CRITIC_RETRIES
 
 DRAFT_MODEL = "meta-models/muse-spark-open-1026"
@@ -96,6 +97,7 @@ def _openai_chat(url: str, key: str, model: str, system: str, user: str) -> str 
 
 
 def _live_draft(filename: str, text: str, transform: str) -> str | None:
+    debug.log_event("draft", {"model": DRAFT_MODEL, "chars": len(text), "transform": transform})
     key = os.environ.get("BASETEN_API_KEY", "")
     if not key:
         return None
@@ -164,6 +166,7 @@ def _meta_multipart(url: str, key: str, fields: dict, files: dict, timeout: int 
 
 
 def sam_rip_live(image_b64: str, prompt: str, point: list[float]) -> dict | None:
+    debug.log_event("sam-live", {"model": RIP_MODEL, "img_chars": len(image_b64)})
     """Live SAM 3.1 segmentation. Returns {bbox, cutout_png_b64} or None."""
     key = os.environ.get("META_API_KEY", "")
     if not key or not image_b64:
@@ -183,6 +186,7 @@ def sam_rip_live(image_b64: str, prompt: str, point: list[float]) -> dict | None
 
 
 def voice_transcribe_live(wav_bytes: bytes) -> str | None:
+    debug.log_event("stt-live", {"model": VOICE_MODEL, "bytes": len(wav_bytes)})
     """Live muse-voice-transcribe (OpenAI-compatible transcriptions). Returns text or None."""
     key = os.environ.get("META_API_KEY", "")
     if not key or not wav_bytes:
@@ -200,6 +204,7 @@ def voice_transcribe_live(wav_bytes: bytes) -> str | None:
 
 
 def restyle_live(image_b64: str, style: str) -> dict | None:
+    debug.log_event("restyle-live", {"model": IMAGE_MODEL, "img_chars": len(image_b64)})
     """Live muse-image restyle (OpenAI-compatible images). Returns {image_b64} or None."""
     import base64
 
@@ -251,6 +256,7 @@ def voice_command_live(wav_bytes: bytes) -> dict | None:
 
 
 def _live_critic_fix(draft: str, issues: list[str], flavor: str) -> str | None:
+    debug.log_event("critic-fix", {"model": CRITIC_MODEL, "issues": issues})
     key = os.environ.get("META_API_KEY", "")
     if not key:
         return None
@@ -384,6 +390,7 @@ def _auto_fix(text: str, flavor: str) -> str:
 
 
 def critic_verify(filename: str, draft: str, transform: str) -> dict:
+    debug.log_event("critic-verify", {"file": filename, "transform": transform})
     """Validator + Wonder critic loop (dev: deterministic auto-fix passes).
 
     Returns the verified script plus `ok`, `retries` (<= MAX_CRITIC_RETRIES)
@@ -431,6 +438,7 @@ def critic_verify(filename: str, draft: str, transform: str) -> dict:
 
 
 def transpile_with_critic(filename: str, content: bytes, transform: str) -> dict:
+    debug.log_event("transpile", {"file": filename, "transform": transform, "bytes": len(content)})
     """Draft (Spark) + critic (Wonder, <=3 retries). Dev = local rewrite."""
     text = content.decode("utf-8", errors="replace")
     live_draft = None if is_dev() else _live_draft(filename, text, transform)
@@ -470,6 +478,7 @@ def transpile_with_critic(filename: str, content: bytes, transform: str) -> dict
 
 
 def sam_rip_fallback(prompt: str) -> dict:
+    debug.log_event("sam-served", {"mode": "fallback"})
     """Deterministic dev fallback: center-box pseudo mask + echo cutout."""
     return {
         "bbox": [0.25, 0.25, 0.75, 0.75],
@@ -479,6 +488,7 @@ def sam_rip_fallback(prompt: str) -> dict:
 
 
 def voice_fallback(wav: bytes) -> dict:
+    debug.log_event("voice-served", {"mode": "fallback", "bytes": len(wav)})
     _ = wav  # validated for 16kHz mono PCM upstream; dev ignores bytes
     return {
         "transcript": "slide the game window to my mac and screenshot the boss",
@@ -488,4 +498,5 @@ def voice_fallback(wav: bytes) -> dict:
 
 
 def restyle_fallback(image_b64: str, style: str) -> dict:
+    debug.log_event("restyle-fallback", {"img_chars": len(image_b64)})
     return {"image_b64": image_b64, "style": style, "model": IMAGE_MODEL}

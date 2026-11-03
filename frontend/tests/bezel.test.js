@@ -4,6 +4,7 @@ import {
   cursorOwner,
   macToHostGameCoords,
   straddleView,
+  fitScale,
 } from '../src/bezel.js';
 
 describe('bezel straddle math', () => {
@@ -36,5 +37,22 @@ describe('bezel straddle math', () => {
 
   it('clamp cursor', () => {
     expect(clampCursor(9999, -5, 1920, 1080)).toEqual([1919, 0]);
+  });
+
+  describe('fitScale any-resolution fit', () => {
+    it('1:1 when the frame fits', () => {
+      expect(fitScale(960, 500, 1920, 572)).toBe(1);
+      expect(fitScale(1920, 572, 1920, 572)).toBe(1);
+    });
+    it('scales to fit oversized frames', () => {
+      expect(fitScale(1462, 1715, 1920, 572)).toBeCloseTo(572 / 1715, 5);
+      expect(fitScale(1600, 900, 1920, 572)).toBeCloseTo(572 / 900, 5);
+      expect(fitScale(3840, 2160, 1920, 572)).toBeCloseTo(572 / 2160, 5);
+      expect(fitScale(4000, 500, 1920, 572)).toBeCloseTo(1920 / 4000, 5);
+    });
+    it('rejects junk', () => {
+      expect(fitScale(0, 900, 1920, 572)).toBe(1);
+      expect(fitScale(-5, 900, 1920, 572)).toBe(1);
+    });
   });
 });

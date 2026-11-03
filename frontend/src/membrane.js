@@ -1,7 +1,14 @@
 // Thin REST client for the Meta AI Bezel Membrane routers.
 
 export function bridgeBase() {
-  return import.meta.env.VITE_BRIDGE_URL || 'http://localhost:8000';
+  // Explicit build-time URL wins; otherwise talk to whoever serves the
+  // portal (same laptop in sim-dual, LAN host in 2-machine mode).
+  if (import.meta.env.VITE_BRIDGE_URL) return import.meta.env.VITE_BRIDGE_URL;
+  try {
+    const h = window.location.hostname;
+    if (h) return `http://${h}:8000`;
+  } catch { /* non-browser (tests): fall through */ }
+  return 'http://localhost:8000';
 }
 
 async function post(path, body, contentType = 'application/json') {

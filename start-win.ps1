@@ -13,7 +13,9 @@ Write-Host ""
 
 $lan = $args[0]
 if (-not $lan) {
-  $lan = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*' } | Select-Object -First 1).IPAddress
+  $vbox = (Get-NetAdapter | Where-Object { $_.InterfaceDescription -like '*VirtualBox*' -or $_.InterfaceDescription -like '*VMware*' -or $_.InterfaceDescription -like '*Hyper-V*' -or $_.Name -like '*WSL*' } | Select-Object -ExpandProperty ifIndex)
+$lan = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { ($_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*') -and $vbox -notcontains $_.ifIndex -and $_.InterfaceAlias -notlike '*vEthernet*' -and $_.InterfaceAlias -notlike '*WSL*' } | Select-Object -First 1).IPAddress
+if (-not $lan) { $lan = '127.0.0.1'; Write-Host 'No physical LAN adapter found — solo mode on 127.0.0.1.' }
   Write-Host "LAN IP: $lan  (Mac portal uses VITE_BRIDGE_URL=http://$lan`:8000)"
 }
 .venv\Scripts\python bridge-node\start.py --lan $lan --title Terraria

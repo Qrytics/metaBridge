@@ -9,6 +9,7 @@ macOS clicks/keys back into host game-local coords.
 
 import time
 from dataclasses import dataclass, field
+from .diag import log as diag_log
 
 try:
     from pynput import keyboard, mouse  # type: ignore
@@ -199,6 +200,7 @@ class InputAgent:
                     except Exception:
                         if duration is not None and _time.time() - start >= duration:
                             return n
+                        diag_log("input-ws-reconnect", {})
                         await _asyncio.sleep(1.0)  # reconnect backoff
                 return n
 

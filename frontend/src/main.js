@@ -1,4 +1,4 @@
-import { cursorOwner, dragHandoff, SPAN_W, SPAN_WORLD_COLS, spanCamX, spanGlobalToWorld, springStep, straddleView, viewportToFrame } from './bezel.js';
+import { cursorOwner, dragHandoff, SPAN_W, SPAN_WORLD_COLS, spanCamX, spanGlobalToWorld, springStep, straddleView, viewportToFrame, fitScale } from './bezel.js';
 import { createGame, hitSlime, mineAt, placeAt, renderGame, skyColor, stepGame, tileName, WORLD_H, WORLD_W } from './game.js';
 import { decodeB64, restyleAsset, samRip, transferFile, voiceCommand, voiceCommandRaw } from './membrane.js';
 import { paintWallpaper } from './desktop.js';
@@ -6,8 +6,8 @@ import { paintWallpaper } from './desktop.js';
 // --- Global desktop geometry (canvas px = global units) ----------------------
 const W_LEFT = 960;
 const W_RIGHT = 960;
-const WIN_W = 480;
-const WIN_H = 320;
+let WIN_W = 480;
+let WIN_H = 320;
 const TITLE_H = 28;
 const TITLE = 'TERRARIA.EXE [PID 4812] // 60 FPS STREAM';
 
@@ -17,6 +17,10 @@ const simDual = params.get('sim-dual') !== '0';
 // Add to Home Screen on iOS for a one-tap fullscreen Terraria cast.
 const castMode = params.get('cast') === '1';
 document.getElementById('m-mode').textContent = simDual ? 'SIM-DUAL' : 'LINKED';
+// One-shot membrane badge: LIVE only when the bridge runs ENV=prod with keys.
+fetch(`${bridgeBase()}/state`).then((r) => r.json()).then((s) => {
+  document.getElementById('m-mem').textContent = s.membrane_mode === 'live' ? 'LIVE' : 'DEV';
+}).catch(() => { /* bridge unreachable: stays DEV */ });
 
 const cvWin = document.getElementById('cv-win');
 const cvMac = document.getElementById('cv-mac');
@@ -41,13 +45,25 @@ const worldCtx = worldCanvas.getContext('2d');
 const winCanvas = document.createElement('canvas');
 winCanvas.width = WIN_W; winCanvas.height = WIN_H;
 const winCtx = winCanvas.getContext('2d');
+const agentCanvas = document.createElement('canvas'); // live frame buffer (native px)
+let agentScale = 1; // 1 = 1:1; <1 = scaled to fit any resolution
+// Any resolution: 1:1 when the frame fits the desktop, scaled to fit otherwise.
+function sizeAgentWindow(w, h, snap) {
+  agentScale = fitScale(w, h, W_LEFT + W_RIGHT, cvWin.height - TITLE_H);
+  WIN_W = Math.max(1, Math.round(w * agentScale)); WIN_H = Math.round(h * agentScale) + TITLE_H;
+  winCanvas.width = WIN_W; winCanvas.height = WIN_H;
+  if (snap) { winX = Math.max(0, Math.min(240, W_LEFT + W_RIGHT - WIN_W)); winY = 0; }
+  winX = Math.max(0, Math.min(winX, W_LEFT + W_RIGHT - WIN_W));
+  winY = Math.max(Math.min(0, cvWin.height - WIN_H), Math.min(winY, cvWin.height - TITLE_H));
+  dragSlider.max = String(W_LEFT + W_RIGHT - WIN_W);
+}
 
 let winX = 240, winY = 140;
 let winVX = 0, springTarget = null;
 let dragging = false, dragGrabDX = 0, dragGrabDY = 0, dragMoved = 0, downGX = 0, downGY = 0, downBtn = 0, downAlt = false;
 let cursorGX = 200, cursorGY = 300, owner = 'WIN';
 let source = 'sandbox';
-let agentFrame = null, agentBitmap = null, agentWS = null, lastFrameAt = 0;
+let agentFrame = null, agentWS = null, lastFrameAt = 0;
 let samMode = false;
 let rips = []; // {fx, fy, prompt, poly:[[x,y]...], card}
 const keys = { left: false, right: false, jump: false };
@@ -57,6 +73,9 @@ function log(msg) {
   const line = document.createElement('div');
   line.textContent = `[${new Date().toISOString().slice(11, 19)}] ${msg}`;
   logEl.prepend(line);
+  const _dbg = (window.__dbg = window.__dbg || []);
+  _dbg.push(line.textContent);
+  if (_dbg.length > 200) _dbg.splice(0, _dbg.length - 200);
 }
 function tunnel(msg) { log(`MAC -> WIN INPUT TUNNEL: ${msg}`); }
 
@@ -109,14 +128,31 @@ function setSource(next) {
   btnSandbox.classList.toggle('active', next === 'sandbox');
   btnAgent.classList.toggle('active', next === 'agent');
   log(`source -> ${next === 'sandbox' ? 'PLAYABLE_TERRARIA_SANDBOX' : 'LIVE_AGENT_STREAM'}`);
-  if (next === 'agent') connectAgentStream();
+  if (next === 'agent') {
+    connectAgentStream();
+    if (agentCanvas.width) sizeAgentWindow(agentCanvas.width, agentCanvas.height, true);
+  }
   else if (agentWS) { try { agentWS.close(); } catch { /* noop */ } agentWS = null; }
+  if (next === 'sandbox' && (WIN_W !== 480 || WIN_H !== 320)) {
+    WIN_W = 480; WIN_H = 320;
+    winCanvas.width = WIN_W; winCanvas.height = WIN_H;
+    winX = Math.min(winX, W_LEFT + W_RIGHT - WIN_W);
+    winY = Math.min(winY, cvWin.height - WIN_H);
+    dragSlider.max = String(W_LEFT + W_RIGHT - WIN_W);
+  }
 }
 btnSandbox.onclick = () => setSource('sandbox');
 btnAgent.onclick = () => setSource('agent');
 
 function bridgeBase() {
-  return import.meta.env.VITE_BRIDGE_URL || 'http://localhost:8000';
+  // Explicit build-time URL wins; otherwise talk to whoever serves the
+  // portal (same laptop in sim-dual, LAN host in 2-machine mode).
+  if (import.meta.env.VITE_BRIDGE_URL) return import.meta.env.VITE_BRIDGE_URL;
+  try {
+    const h = window.location.hostname;
+    if (h) return `http://${h}:8000`;
+  } catch { /* non-browser (tests): fall through */ }
+  return 'http://localhost:8000';
 }
 function connectAgentStream() {
   if (agentWS) return;
@@ -127,7 +163,13 @@ function connectAgentStream() {
     agentWS.onmessage = async (ev) => {
       if (ev.data instanceof ArrayBuffer) {
         try {
-          agentBitmap = await createImageBitmap(new Blob([ev.data], { type: 'image/jpeg' }));
+          const bmp = await createImageBitmap(new Blob([ev.data], { type: 'image/jpeg' }));
+          if (agentCanvas.width !== bmp.width || agentCanvas.height !== bmp.height) {
+            agentCanvas.width = bmp.width; agentCanvas.height = bmp.height;
+            if (source === 'agent') sizeAgentWindow(bmp.width, bmp.height, false);
+          }
+          agentCanvas.getContext('2d').drawImage(bmp, 0, 0);
+          if (typeof bmp.close === 'function') bmp.close();
           lastFrameAt = performance.now();
         } catch { /* corrupt frame: keep last */ }
       }
@@ -165,7 +207,7 @@ function onMove(canvas, isRight, ev) {
     dragMoved += Math.abs(gx - downGX) + Math.abs(gy - downGY);
     const prev = owner;
     winX = Math.max(0, Math.min(gx - dragGrabDX, W_LEFT + W_RIGHT - WIN_W));
-    winY = Math.max(0, Math.min(gy - dragGrabDY, cvWin.height - WIN_H));
+    winY = Math.max(Math.min(0, cvWin.height - WIN_H), Math.min(gy - dragGrabDY, cvWin.height - TITLE_H));
     const h = dragHandoff(Math.round(gx), W_LEFT, true);
     if (h.owner !== prev) {
       owner = h.owner;
@@ -195,14 +237,23 @@ function onUp(canvas, isRight, ev) {
     if (!inWindow(gx, gy)) return;
     [wx, wy] = globalToGame(gx, gy);
   }
-  if (wy < 0 || wy >= WORLD_H) return;
+  if (wy < 0 || wy >= (source === 'agent' && agentCanvas.width ? agentCanvas.height : WORLD_H)) return;
   const macSide = owner === 'MAC';
   if (samMode || downAlt || ev.altKey) {
-    samRipAt(g, span ? spanCanvas : worldCanvas, wx, wy, gx, gy, macSide);
+    samRipAt(g, span ? spanCanvas : (source === 'agent' && agentCanvas.width ? agentCanvas : worldCanvas), wx, wy, gx, gy, macSide);
     return;
   }
   const btn = downBtn === 2 || ev.button === 2 ? 2 : 0;
   forwardInput('click', { button: btn, gx: Math.round(wx), gy: Math.round(wy), sam: samMode || downAlt || ev.altKey });
+  if (source === 'agent' && agentCanvas.width) {
+    // 1:1 live frame: clicks tunnel to the host as native frame pixels, never touch the sandbox.
+    const fx = Math.max(0, Math.min(Math.round(wx / agentScale), agentCanvas.width - 1));
+    const fy = Math.max(0, Math.min(Math.round(wy / agentScale), agentCanvas.height - 1));
+    forwardInput('click', { button: btn, gx: fx, gy: fy });
+    if (macSide) tunnel(`MAC -> WIN INPUT TUNNEL: CLICK (${fx},${fy})`);
+    else log(`click -> host frame (${fx},${fy})`);
+    return;
+  }
   if (btn === 2) {
     if (placeAt(g, wx, wy)) {
       if (macSide) tunnel(`PLACE (${Math.round(wx)},${Math.round(wy)})`);
@@ -228,6 +279,18 @@ for (const [canvas, isRight] of [[cvWin, false], [cvMac, true]]) {
   canvas.addEventListener('mouseup', (ev) => onUp(canvas, isRight, ev));
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 }
+// Flight recorder: page errors snapshot instantly; HUD + frame every 10s.
+function dbgSnapshot(note) {
+  try {
+    const t = document.createElement('canvas'); t.width = 480; t.height = 300;
+    t.getContext('2d').drawImage(cvWin, 0, 0, 480, 300);
+    fetch(`${bridgeBase()}/debug/client`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hud: { fps: document.getElementById('m-fps').textContent, straddle: document.getElementById('m-straddle').textContent, owner, source, mode, winX: Math.round(winX), winY: Math.round(winY), membrane: document.getElementById('m-mem').textContent, note: note || '' }, log: (window.__dbg || []).slice(-30), shot: (t.toDataURL('image/jpeg', 0.6).split(',')[1] || '') }) }).catch(() => {});
+  } catch { /* recorder never breaks the portal */ }
+}
+window.addEventListener('error', (e) => dbgSnapshot('pageerror: ' + (e.message || 'unknown')));
+window.addEventListener('unhandledrejection', (e) => dbgSnapshot('unhandled: ' + ((e.reason && e.reason.message) || e.reason)));
+setInterval(() => dbgSnapshot(''), 10000);
 window.addEventListener('mousemove', (ev) => {
   if (!dragging) return;
   // Keep the drag alive even when the pointer leaves both canvases.
@@ -435,26 +498,41 @@ function setProjecting(on) {
     : 'projection off: game sky restored');
 }
 btnProject.onclick = () => setProjecting(!projecting);
+// Token guard: SAM is billed on pixels — cap the longest edge before upload.
+function downscaledFrame(src, maxEdge) {
+  const sc = Math.min(1, maxEdge / Math.max(src.width, src.height));
+  if (sc >= 1) return src.toDataURL('image/jpeg', 0.7).split(',')[1] || '';
+  const t = document.createElement('canvas');
+  t.width = Math.max(1, Math.round(src.width * sc));
+  t.height = Math.max(1, Math.round(src.height * sc));
+  t.getContext('2d').drawImage(src, 0, 0, t.width, t.height);
+  return t.toDataURL('image/jpeg', 0.65).split(',')[1] || '';
+}
+let samBusy = false; // one rip at a time: each live call costs vision tokens
 async function samRipAt(g, srcCanvas, wx, wy, gx, gy, macSide) {
-  const [fx, fy] = viewportToFrame(wx, wy, 0, 0, 1);
+  if (samBusy) { log('sam-3.1 rip !! still working — one at a time'); return; }
+  samBusy = true;
+  const [fx, fy] = viewportToFrame(wx, wy, 0, 0, source === 'agent' && agentCanvas.width ? 1 / agentScale : 1);
   const prompt = pickPrompt(g, wx, wy);
   if (macSide) tunnel(`SAM_RIP "${prompt}" @frame(${Math.round(fx)},${Math.round(fy)})`);
   log(`sam-3.1 rip "${prompt}" @frame(${Math.round(fx)},${Math.round(fy)})`);
   let frameB64 = '';
   try {
-    frameB64 = srcCanvas.toDataURL('image/jpeg', 0.7).split(',')[1] || '';
+    frameB64 = downscaledFrame(srcCanvas, 768);
   } catch { frameB64 = ''; }
   try {
-    const res = await samRip(prompt, [fx / WORLD_W, fy / WORLD_H], frameB64);
+    const res = await samRip(prompt, [fx / srcCanvas.width, fy / srcCanvas.height], frameB64);
     const [x0, y0, x1, y1] = res.bbox || [0.25, 0.25, 0.75, 0.75];
     const livePoly = Array.isArray(res.polygon) && res.polygon.length >= 3 ? res.polygon : null;
-    const poly = livePoly || polyFromBbox(x0 * WORLD_W, y0 * WORLD_H, x1 * WORLD_W, y1 * WORLD_H, prompt);
+    const poly = livePoly || polyFromBbox(x0 * srcCanvas.width, y0 * srcCanvas.height, x1 * srcCanvas.width, y1 * srcCanvas.height, prompt);
     if (livePoly) log('sam-3.1 live mask received (model polygon)');
-    rips.push({ fx: (x0 + x1) / 2 * WORLD_W, fy: (y0 + y1) / 2 * WORLD_H, prompt, poly });
+    rips.push({ fx: (x0 + x1) / 2 * srcCanvas.width, fy: (y0 + y1) / 2 * srcCanvas.height, prompt, poly });
     mintSpriteCard(srcCanvas, poly, prompt, gx, gy);
     log(`sam-3.1 contour locked (${poly.length} pts) — drag the card across the bezel`);
+    samBusy = false;
   } catch (err) {
     log(`sam-3.1 rip !! ${err}`);
+    samBusy = false;
   }
 }
 function polyFromBbox(x0, y0, x1, y1, seed) {
@@ -487,12 +565,18 @@ function mintSpriteCard(srcCanvas, poly, prompt, gx, gy) {
   const cropB64 = c.toDataURL('image/png').split(',')[1] || '';
   card.querySelector('.rs').onclick = async (ev) => {
     ev.stopPropagation();
+    const btn = ev.currentTarget;
+    if (btn.disabled) return; // one restyle at a time: each call costs image tokens
+    btn.disabled = true;
+    ev.stopPropagation();
     try {
       const res = await restyleAsset(cropB64, 'concept-art-hd');
       card.insertAdjacentHTML('beforeend', `<div class="hd">HD restyle ✓ (${res.style})</div>`);
       log(`muse-image restyle ✓ "${prompt}" -> ${res.style}`);
+      btn.disabled = false;
     } catch (err) {
       log(`restyle !! ${err}`);
+      btn.disabled = false;
     }
   };
   card.addEventListener('pointerdown', (ev) => {
@@ -525,7 +609,8 @@ function drawRipContours() {
   for (const rip of rips.slice(-3)) {
     ctx.beginPath();
     rip.poly.forEach(([x, y], i) => {
-      const px = x, py = yBase + y;
+      const sc = (mode === 'span' || source !== 'agent' || !agentCanvas.width) ? 1 : agentScale;
+      const px = x * sc, py = yBase + y * sc;
       if (i === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
@@ -537,12 +622,14 @@ function drawRipContours() {
 
 // --- Voice cross-OS command bar --------------------------------------------------
 const btnMic = document.getElementById('btn-mic');
-async function voiceAction(target, label) {
+function voiceAction(target, label) {
+  // Canned quick command: the action is already known, so no model call.
+  // (The real mic path below is the only voice API spend.)
   btnMic.classList.add('live');
   if (mode === 'span') setMode('window'); // glides act on the floating window
   try {
-    const res = await voiceCommand(new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]));
-    log(`voice "${res.transcript}" -> action=${res.action} (${label})`);
+    // (no network: canned glide, zero tokens)
+    log(`voice (local) -> action=${label}`);
     springTarget = target;
   } catch (err) {
     log(`voice !! ${err} — springing anyway (${label})`);
@@ -604,11 +691,15 @@ function inputLink() {
       if (m.pong !== undefined) rttMs = Math.max(1, Math.round(performance.now() - m.pong));
     } catch { /* binary/owner acks ignored */ }
   };
-  setInterval(() => {
-    if (inputWS && inputWS.readyState === 1) inputWS.send(JSON.stringify({ ping: performance.now() }));
-  }, 2000);
+
+
+
 }
 inputLink();
+// One shared ping timer: inputLink() reconnects, so a per-attempt timer would leak.
+setInterval(() => {
+  if (inputWS && inputWS.readyState === 1) inputWS.send(JSON.stringify({ ping: performance.now() }));
+}, 2000);
 function forwardInput(kind, extra = {}) {
   if (inputWS && inputWS.readyState === 1) {
     try {
@@ -695,8 +786,8 @@ function drawWindowChrome() {
   winCtx.fillStyle = '#3a4354';
   winCtx.fillRect(0, TITLE_H - 1, WIN_W, 1);
   // Content
-  if (source === 'agent' && agentBitmap) {
-    winCtx.drawImage(agentBitmap, 0, TITLE_H, WIN_W, WIN_H - TITLE_H);
+  if (source === 'agent' && agentCanvas.width) {
+    winCtx.drawImage(agentCanvas, 0, 0, agentCanvas.width, agentCanvas.height, 0, TITLE_H, WIN_W, WIN_H - TITLE_H); // 1:1 or fit, zero crop
     winCtx.fillStyle = 'rgba(76,195,255,0.9)';
     winCtx.font = '10px monospace';
     winCtx.fillText('LIVE_AGENT_STREAM', 8, TITLE_H + 16);
@@ -704,7 +795,7 @@ function drawWindowChrome() {
     if (projecting) worldCtx.clearRect(0, 0, WORLD_W, WORLD_H);
     renderGame(worldCtx, game, 0, WORLD_W, 0, projecting ? { sky: false } : undefined);
     winCtx.drawImage(worldCanvas, 0, TITLE_H);
-    if (source === 'agent' && !agentBitmap) {
+    if (source === 'agent' && !agentCanvas.width) {
       winCtx.fillStyle = 'rgba(5,7,10,0.7)';
       winCtx.fillRect(0, TITLE_H, WIN_W, WIN_H - TITLE_H);
       winCtx.fillStyle = '#8a94a3';

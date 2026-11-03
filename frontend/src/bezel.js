@@ -61,6 +61,11 @@ export function springStep(x, v, target, k = 90, d = 14, dt = 1 / 60) {
 }
 
 // SPAN mode: one world rendered 1:1 across both screens (Eyefinity-style).
+// Fit any frame onto the desktop: 1:1 when it fits, scaled to fit otherwise.
+export function fitScale(fw, fh, maxW, maxH) {
+  if (fw <= 0 || fh <= 0 || maxW <= 0 || maxH <= 0) return 1;
+  return Math.min(1, maxW / fw, maxH / fh);
+}
 export const SPAN_W = 1920; // == W_LEFT + W_RIGHT, both canvases edge-to-edge
 export const SPAN_WORLD_COLS = 120; // 120 tiles * 16px == SPAN_W, zero stretch
 
