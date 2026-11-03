@@ -21,7 +21,7 @@ fi
 # Always rebuild the portal so start.py never serves a stale frontend/dist.
 if command -v npm >/dev/null 2>&1; then
   echo "== Building portal =="
-  (cd frontend && { [ -d node_modules ] || npm install --silent; } && npm run build --silent)
+  (cd frontend && npm install --silent && npm run build --silent)
 else
   echo "WARNING: npm not found - serving existing frontend/dist (may be stale)."
 fi

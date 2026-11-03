@@ -22,7 +22,8 @@ if (-not $lan) { $lan = '127.0.0.1'; Write-Host 'No physical LAN adapter found â
 if (Get-Command npm -ErrorAction SilentlyContinue) {
   Write-Host "== Building portal =="
   Push-Location frontend
-  if (-not (Test-Path node_modules)) { npm install --silent }
+  npm install --silent
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npm install failed" }
   npm run build --silent
   if ($LASTEXITCODE -ne 0) { Pop-Location; throw "Portal build failed" }
   Pop-Location
