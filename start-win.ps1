@@ -18,4 +18,16 @@ $lan = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { ($_.IPAddress -lik
 if (-not $lan) { $lan = '127.0.0.1'; Write-Host 'No physical LAN adapter found — solo mode on 127.0.0.1.' }
   Write-Host "LAN IP: $lan  (Mac portal uses VITE_BRIDGE_URL=http://$lan`:8000)"
 }
+# Always rebuild the portal so start.py never serves a stale frontend\dist.
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+  Write-Host "== Building portal =="
+  Push-Location frontend
+  if (-not (Test-Path node_modules)) { npm install --silent }
+  npm run build --silent
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "Portal build failed" }
+  Pop-Location
+} else {
+  Write-Host "WARNING: npm not found - serving existing frontend\dist (may be stale)."
+}
+
 .venv\Scripts\python bridge-node\start.py --lan $lan --title Terraria
