@@ -93,6 +93,14 @@ node verify-cast.mjs      # phone-viewport fullscreen spectator
 
 All three must end `VERIFY PASS ... zero console errors`.
 
+## Debugging the Live agent stream
+
+Everything between the capture and the pixels is instrumented on both ends.
+
+- **During a run:** `python bridge-node/watch.py http://<host-ip>:8000` prints a per-second verdict (`OK / DEGRADED / DOWN`) and a loud `FAIL <check>: <detail>` line the moment something breaks (no publisher, stall, <10fps, synthetic fake frames, invalid frames, hitches, agent POST errors, window not found, no viewers).
+- **After a run:** download `http://<host-ip>:8000/debug/bundle`. It has the bridge `events.jsonl` (`stream-*` anomalies, `client:*` portal reports), `agent.jsonl` (capture backend errors, window found/missing, publish errors), `state.json` (stream summary), the latest frame and portal screenshots. Also `GET /debug/stream` and `POST /debug/stream/reset`.
+- **Prove the detectors work:** `cd frontend && npm run build && node verify-live-agent.mjs` — spawns bridge + portal + a fake agent, clicks "Live agent", injects 8 fault classes (no agent, resize, corrupt frames, agent killed, synthetic fallback, black frames, bridge restart, toggle leak) and fails if either end misses one. `pytest backend/tests/test_stream_monitor.py backend/tests/test_agent_publish.py` covers the logic.
+
 ## Repo contents
 
 - `backend/` — FastAPI + WebSocket bridge: `main.py` (REST + `/ws/viewport` + `/ws/input`), `bezel.py` (straddle/camera/input math, mirrored in JS), `membrane.py` (5-model routers, live + dev paths), `tests/`.

@@ -43,19 +43,43 @@ def synthetic_frame(w: int = 640, h: int = 360, t: float = 0.0) -> bytes:
     return buf.getvalue()
 
 
-def capture_window_once(region: dict | None = None, quality: int = 92) -> bytes:
-    """Capture one frame: dxcam -> mss -> synthetic fallback."""
-    try:  # Windows GPU path
+_dxcam_cam = None
+_cap_errs: dict = {}
+
+
+def _cap_fail(src: str, exc: BaseException) -> None:
+    """Record a capture-backend failure once per distinct error (no log spam)."""
+    key = (src, type(exc).__name__, str(exc)[:80])
+    if key in _cap_errs:
+        return
+    _cap_errs[key] = time.time()
+    diag_log("capture-backend-error", {"src": src, "err": f"{type(exc).__name__}: {exc}"[:300]})
+
+
+def capture_window_frame(region: dict | None = None, quality: int = 92) -> tuple[bytes, str]:
+    """Capture one frame -> (jpeg, source) where source is dxcam|mss|synthetic.
+
+    `synthetic` means every real backend failed and FAKE frames are streaming;
+    the bridge flags that loudly instead of letting it pass as a live view.
+    """
+    global _dxcam_cam
+    try:  # Windows GPU path (camera is expensive to create: reuse it)
         import dxcam  # type: ignore
 
-        cam = dxcam.create()
-        shot = cam.grab(region=region) if region else cam.grab()
+        if _dxcam_cam is None:
+            _dxcam_cam = dxcam.create()
+        r = None
+        if region:
+            r = (region["left"], region["top"], region["left"] + region["width"], region["top"] + region["height"])
+        shot = _dxcam_cam.grab(region=r) if r else _dxcam_cam.grab()
         if shot is not None:
             from PIL import Image as PILImage
 
-            return _to_jpeg(PILImage.fromarray(shot), quality)
-    except Exception:
+            return _to_jpeg(PILImage.fromarray(shot), quality), "dxcam"
+    except ImportError:
         pass
+    except Exception as exc:
+        _cap_fail("dxcam", exc)
     try:  # Cross-platform path
         import mss  # type: ignore
 
@@ -71,10 +95,15 @@ def capture_window_once(region: dict | None = None, quality: int = 92) -> bytes:
             shot = sct.grab(mon)
             from PIL import Image as PILImage
 
-            return _to_jpeg(PILImage.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX"), quality)
-    except Exception:
-        pass
-    return synthetic_frame(t=time.time() % 60)
+            return _to_jpeg(PILImage.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX"), quality), "mss"
+    except Exception as exc:
+        _cap_fail("mss", exc)
+    return synthetic_frame(t=time.time() % 60), "synthetic"
+
+
+def capture_window_once(region: dict | None = None, quality: int = 92) -> bytes:
+    """Capture one frame: dxcam -> mss -> synthetic fallback."""
+    return capture_window_frame(region, quality)[0]
 
 
 def _to_jpeg(img, quality: int = 92) -> bytes:
@@ -158,24 +187,54 @@ def publish_loop(
     sent, start = 0, _time.time()
     errs, last_stat = 0, start
     retarget_at = 0.0
+    seq, win_state, post_ms = 0, "n/a", None
+    last_err, consec_err, last_src = "", 0, ""
     while True:
         if title and _time.time() >= retarget_at:
             # Re-resolve the live game window every 5s (it moves/resizes).
-            region = find_window_region(title) or region
+            found = find_window_region(title)
+            if found is None and win_state != "missing":
+                diag_log("window-missing", {"title": title, "using_last_region": region is not None})
+            elif found is not None and win_state == "missing":
+                diag_log("window-refound", {"title": title, "region": found})
+            win_state = "found" if found else "missing"
+            region = found or region
             retarget_at = _time.time() + 5.0
-        frame = capture_window_once(region, quality)
-        req = urllib.request.Request(
-            url, data=frame, headers={"Content-Type": "image/jpeg"}, method="POST"
-        )
+        t0 = _time.perf_counter()
+        frame, src = capture_window_frame(region, quality)
+        cap_ms = (_time.perf_counter() - t0) * 1000.0
+        if src != last_src:
+            diag_log("capture-source", {"src": src, "was": last_src or None})
+            last_src = src
+        headers = {
+            "Content-Type": "image/jpeg",
+            "X-MB-Seq": str(seq), "X-MB-Src": src, "X-MB-Cap-Ms": f"{cap_ms:.1f}",
+            "X-MB-Errs": str(errs), "X-MB-Win": win_state,
+        }
+        if post_ms is not None:
+            headers["X-MB-Post-Ms"] = f"{post_ms:.1f}"
+        req = urllib.request.Request(url, data=frame, headers=headers, method="POST")
+        t1 = _time.perf_counter()
         try:
             with urllib.request.urlopen(req, timeout=5) as res:
                 res.read()
-        except Exception:
+            post_ms = (_time.perf_counter() - t1) * 1000.0
+            if consec_err:
+                diag_log("publish-recovered", {"after_errors": consec_err})
+            consec_err = 0
+        except Exception as exc:
             errs += 1  # bridge unreachable: keep capturing locally (counted below)
+            consec_err += 1
+            post_ms = None
+            msg = f"{type(exc).__name__}: {exc}"[:200]
+            if msg != last_err or consec_err in (1, 10, 100, 1000):
+                last_err = msg
+                diag_log("publish-error", {"err": msg, "consecutive": consec_err, "total": errs, "url": url})
+        seq += 1
         sent += 1
         if sent % 100 == 0 or _time.time() - last_stat >= 30:
             last_stat = _time.time()
-            diag_log("capture-stats", {"sent": sent, "errs": errs, "fps": fps, "quality": quality, "title": title, "region": [region["width"], region["height"]] if region else None})
+            diag_log("capture-stats", {"sent": sent, "errs": errs, "fps": fps, "quality": quality, "title": title, "src": last_src, "window": win_state, "region": [region["width"], region["height"]] if region else None})
         if duration is not None and _time.time() - start >= duration:
             break
         _time.sleep(max(0.0, period - (_time.time() - start - sent * period) % period))

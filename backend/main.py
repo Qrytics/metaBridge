@@ -8,6 +8,7 @@ import argparse
 import os
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +20,13 @@ from . import bezel, debug, membrane
 ROLE_WIN = "win"
 ROLE_MAC = "mac"
 
-app = FastAPI(title="MetaBridge Bridge Server")
+@asynccontextmanager
+async def _lifespan_proxy(app_: FastAPI):
+    async with _lifespan(app_):
+        yield
+
+
+app = FastAPI(title="MetaBridge Bridge Server", lifespan=_lifespan_proxy)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,6 +67,46 @@ _viewport_subs: set[WebSocket] = set()
 _input_history: deque = deque(maxlen=240)  # ~2s @120Hz
 
 
+async def _stream_watchdog() -> None:
+    """Silence detector: per-frame hooks cannot see a stream that stopped."""
+    import asyncio
+
+    while True:
+        await asyncio.sleep(0.5)
+        try:
+            debug.stream.tick(len(_viewport_subs))
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    import asyncio
+
+    task = asyncio.create_task(_stream_watchdog())
+    debug.log_event("bridge-start", {"pid": os.getpid(), "env": os.environ.get("ENV", "dev"), "sim_dual": _state["sim_dual"]})
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+def _frame_meta(request: Request) -> dict:
+    """Agent self-reported frame metadata (X-MB-* headers); all optional."""
+    h = request.headers
+
+    def num(name: str, cast):
+        try:
+            return cast(h.get(name, ""))
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "seq": num("x-mb-seq", int), "src": h.get("x-mb-src"), "cap_ms": num("x-mb-cap-ms", float),
+        "post_ms": num("x-mb-post-ms", float), "errs": num("x-mb-errs", int), "win": h.get("x-mb-win"),
+    }
+
+
 class ClientNote(BaseModel):
     hud: dict = Field(default_factory=dict)
     log: list = Field(default_factory=list)
@@ -83,6 +130,36 @@ async def debug_client(request: Request) -> dict:
         return JSONResponse(status_code=400, content={"detail": "expected JSON"})
     stored = debug.client_note(body.get("hud", {}), body.get("log", []), body.get("shot", ""))
     return {"stored": stored}
+
+
+@app.get("/debug/stream")
+def debug_stream() -> dict:
+    """Live-agent stream health: verdict + per-check detail + raw counters."""
+    debug.stream.tick(len(_viewport_subs))
+    return {"health": debug.stream.health(len(_viewport_subs)), "stream": debug.stream.summary(), "viewers": len(_viewport_subs)}
+
+
+@app.post("/debug/stream/reset")
+def debug_stream_reset() -> dict:
+    """Zero the stream monitor (call before a test run for clean counters)."""
+    debug.stream.reset()
+    debug.log_event("stream-reset", {})
+    return {"ok": True}
+
+
+@app.post("/debug/client-event")
+async def debug_client_event(request: Request) -> dict:
+    """Portal-reported events: stalls, WS closes, decode errors, console errors."""
+    if int(request.headers.get("content-length") or 0) > 20_000:
+        return JSONResponse(status_code=413, content={"detail": "event too large"})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"detail": "expected JSON"})
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=400, content={"detail": "expected object"})
+    host = request.client.host if request.client else ""
+    return {"stored": debug.client_event(body.get("kind", "unknown"), body.get("data", {}), host)}
 
 
 @app.get("/debug/bundle")
@@ -239,12 +316,14 @@ async def ws_viewport(ws: WebSocket) -> None:
     rebroadcast to every other subscriber; text frames get a tick reply."""
     await ws.accept()
     _viewport_subs.add(ws)
-    debug.log_event("viewport-sub", {"viewers": len(_viewport_subs)})
+    debug.log_event("viewport-sub", {"viewers": len(_viewport_subs), "client": ws.client.host if ws.client else ""})
     _state["viewers"] = len(_viewport_subs)
+    debug.stream.on_viewers(len(_viewport_subs))
     try:
         while True:
             msg = await ws.receive()
             if msg.get("bytes") is not None:
+                debug.note_frame(msg["bytes"], {"src": "ws"})
                 await broadcast_frame(msg["bytes"], exclude=ws)
             elif msg.get("text") is not None:
                 await ws.send_json({"tick": time.time()})
@@ -253,23 +332,30 @@ async def ws_viewport(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        debug.log_event("viewport-unsub", {"viewers": len(_viewport_subs)})
         _viewport_subs.discard(ws)
         _state["viewers"] = len(_viewport_subs)
+        debug.stream.on_viewers(len(_viewport_subs))
+        debug.log_event("viewport-unsub", {"viewers": len(_viewport_subs)})
 
 
 async def broadcast_frame(payload: bytes, exclude: WebSocket | None = None) -> None:
     dead = []
+    sent = 0
+    t0 = time.perf_counter()
     for ws in list(_viewport_subs):
         if ws is exclude:
             continue
         try:
             await ws.send_bytes(payload)
+            sent += 1
         except Exception:
             dead.append(ws)
     for ws in dead:
         _viewport_subs.discard(ws)
     _state["viewers"] = len(_viewport_subs)
+    debug.stream.on_broadcast(sent, len(dead), time.perf_counter() - t0)
+    if dead:
+        debug.stream.on_viewers(len(_viewport_subs))
 
 
 @app.post("/viewport/frame")
@@ -277,8 +363,10 @@ async def viewport_frame(request: Request) -> dict:
     """HTTP publisher path for agent/capture.py::publish_loop."""
     body = await request.body()
     if body:
-        debug.note_frame(body)
+        debug.note_frame(body, _frame_meta(request))
         await broadcast_frame(body)
+    else:
+        debug.stream.on_empty_post()
     return {"viewers": len(_viewport_subs), "bytes": len(body)}
 
 

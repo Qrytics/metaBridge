@@ -98,6 +98,8 @@ window.__metaBridge = {
   get playerX() { return Math.round((mode === 'span' ? spanGame : game).player.x); },
   get straddle() { return mode === 'span' ? 1920 : straddleView(winX, winY, WIN_W, WIN_H, W_LEFT).straddleOffsetPx; },
   get owner() { return owner; },
+  get source() { return source; },
+  get stream() { return { ...streamStats, lastRxAgeMs: agentLastRx ? Math.round(performance.now() - agentLastRx) : null, canvas: [agentCanvas.width, agentCanvas.height], win: [WIN_W, WIN_H], scale: agentScale }; },
   setWinX(x) { winX = Math.max(0, Math.min(x, W_LEFT + W_RIGHT - WIN_W)); },
 };
 
@@ -139,12 +141,17 @@ function setSource(next) {
   btnAgent.classList.toggle('active', next === 'agent');
   btnSandbox.setAttribute('aria-pressed', String(next === 'sandbox'));
   btnAgent.setAttribute('aria-pressed', String(next === 'agent'));
+  reportEvent('source-change', { to: next });
   log(`source -> ${next === 'sandbox' ? 'PLAYABLE_TERRARIA_SANDBOX' : 'LIVE_AGENT_STREAM'}`);
   if (next === 'agent') {
     connectAgentStream();
     if (agentCanvas.width) sizeAgentWindow(agentCanvas.width, agentCanvas.height, true);
   }
-  else if (agentWS) { try { agentWS.close(); } catch { /* noop */ } agentWS = null; }
+  else {
+    if (agentRetryT) { clearTimeout(agentRetryT); agentRetryT = null; }
+    if (agentWS) { const w = agentWS; agentWS = null; try { w.close(); } catch { /* noop */ } }
+    streamStats.state = 'idle';
+  }
   if (next === 'sandbox' && (WIN_W !== 480 || WIN_H !== 320)) {
     WIN_W = 480; WIN_H = 320;
     winCanvas.width = WIN_W; winCanvas.height = WIN_H;
@@ -166,30 +173,142 @@ function bridgeBase() {
   } catch { /* non-browser (tests): fall through */ }
   return 'http://localhost:8000';
 }
+// --- Live-agent stream telemetry ---------------------------------------------
+// Everything that can go wrong between the bridge socket and the pixels on
+// screen is counted here, shown in the HUD log, and POSTed to the bridge
+// (/debug/client-event) so one /debug/bundle holds both ends of the story.
+const streamStats = {
+  state: 'idle', opens: 0, closes: 0, errors: 0, reconnects: 0,
+  rx: 0, rxBytes: 0, decoded: 0, decodeErrors: 0, drawErrors: 0, resizes: 0,
+  maxGapMs: 0, stalls: 0, blank: 0, lastCloseCode: null, lastError: '',
+};
+let agentBlankSeen = 0, agentBlankRun = 0;
+let agentRetryT = null, agentBackoff = 500, agentLastRx = 0, agentStalled = false, agentOpenedAt = 0, agentDecoding = false;
+const sentOnce = new Map();
+function reportEvent(kind, data = {}) {
+  // Rate-limit identical kinds to 1 per 3s so a failure loop cannot flood.
+  const now = performance.now();
+  if (now - (sentOnce.get(kind) || -1e9) < 3000) return;
+  sentOnce.set(kind, now);
+  log(`stream:${kind} ${JSON.stringify(data)}`.slice(0, 200));
+  try {
+    fetch(`${bridgeBase()}/debug/client-event`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ kind, data: { ...data, stats: { ...streamStats }, t: Math.round(now), src: source, ua: navigator.userAgent.slice(0, 80) } }),
+    }).catch(() => {});
+  } catch { /* telemetry never breaks the portal */ }
+}
+function agentSampleBlank() {
+  // A frame that decoded but is black/flat looks "connected" yet shows nothing.
+  try {
+    const t = document.createElement('canvas'); t.width = 32; t.height = 18;
+    const c = t.getContext('2d'); c.drawImage(agentCanvas, 0, 0, 32, 18);
+    const d = c.getImageData(0, 0, 32, 18).data;
+    let lo = 255, hi = 0;
+    for (let i = 0; i < d.length; i += 4) { const v = d[i] + d[i + 1] + d[i + 2]; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    return hi - lo < 6;
+  } catch { return false; }
+}
+setInterval(() => {
+  if (source !== 'agent') return;
+  const now = performance.now();
+  if (!agentWS && !agentRetryT) { reportEvent('ws-missing', {}); connectAgentStream(); return; }
+  if (agentWS && agentWS.readyState === 1 && now - agentOpenedAt > 3000) {
+    const silent = now - (agentLastRx || agentOpenedAt);
+    if (silent > 2500 && !agentStalled) {
+      agentStalled = true; streamStats.stalls++;
+      reportEvent('no-frames', { silent_ms: Math.round(silent), rx: streamStats.rx, note: agentLastRx ? 'stream stopped' : 'socket open but no frame ever arrived (agent not publishing?)' });
+    }
+  }
+  // Blank check: only when new frames actually arrived since the last sample;
+  // two consecutive flat samples (~2s) so a single dark scene does not alarm.
+  if (streamStats.decoded > agentBlankSeen + 5) {
+    agentBlankSeen = streamStats.decoded;
+    if (agentSampleBlank()) {
+      agentBlankRun++;
+      if (agentBlankRun === 2) { streamStats.blank++; reportEvent('blank-frame', { n: streamStats.blank, note: 'frames decode but are one flat color (Screen Recording permission? protected window?)' }); }
+    } else agentBlankRun = 0;
+  }
+}, 1000);
+function scheduleAgentRetry(why) {
+  if (source !== 'agent' || agentRetryT) return;
+  streamStats.reconnects++;
+  const wait = agentBackoff;
+  agentBackoff = Math.min(agentBackoff * 2, 5000);
+  streamStats.state = `retry in ${wait}ms`;
+  agentRetryT = setTimeout(() => { agentRetryT = null; if (source === 'agent') connectAgentStream(); }, wait);
+  log(`agent stream reconnect in ${wait}ms (${why})`);
+}
 function connectAgentStream() {
   if (agentWS) return;
+  let url = '';
   try {
-    const url = bridgeBase().replace(/^http/, 'ws') + '/ws/viewport';
-    agentWS = new WebSocket(url);
-    agentWS.binaryType = 'arraybuffer';
-    agentWS.onmessage = async (ev) => {
-      if (ev.data instanceof ArrayBuffer) {
-        try {
-          const bmp = await createImageBitmap(new Blob([ev.data], { type: 'image/jpeg' }));
-          if (agentCanvas.width !== bmp.width || agentCanvas.height !== bmp.height) {
-            agentCanvas.width = bmp.width; agentCanvas.height = bmp.height;
-            if (source === 'agent') sizeAgentWindow(bmp.width, bmp.height, false);
-          }
-          agentCanvas.getContext('2d').drawImage(bmp, 0, 0);
-          if (typeof bmp.close === 'function') bmp.close();
-          lastFrameAt = performance.now();
-        } catch { /* corrupt frame: keep last */ }
+    url = bridgeBase().replace(/^http/, 'ws') + '/ws/viewport';
+    const ws = new WebSocket(url);
+    agentWS = ws;
+    ws.binaryType = 'arraybuffer';
+    streamStats.state = 'connecting';
+    ws.onopen = () => {
+      streamStats.opens++; streamStats.state = 'open'; agentOpenedAt = performance.now(); agentLastRx = 0; agentStalled = false;
+      agentBackoff = 500;
+      log(`agent stream open ${url}`);
+    };
+    ws.onmessage = async (ev) => {
+      if (!(ev.data instanceof ArrayBuffer)) return; // text ticks
+      const rxAt = performance.now();
+      if (agentLastRx) {
+        const gap = rxAt - agentLastRx;
+        if (gap > streamStats.maxGapMs) streamStats.maxGapMs = Math.round(gap);
+        if (gap > 1000 && !agentStalled) reportEvent('frame-gap', { gap_ms: Math.round(gap) });
+      }
+      if (agentStalled) { agentStalled = false; log('agent stream recovered'); }
+      agentLastRx = rxAt; streamStats.rx++; streamStats.rxBytes += ev.data.byteLength;
+      if (agentDecoding) return; // drop-frames-while-busy keeps latency bounded
+      agentDecoding = true;
+      let bmp = null;
+      try {
+        bmp = await createImageBitmap(new Blob([ev.data], { type: 'image/jpeg' }));
+      } catch (err) {
+        streamStats.decodeErrors++;
+        reportEvent('decode-error', { err: String(err && err.message || err), bytes: ev.data.byteLength });
+        agentDecoding = false;
+        return; // corrupt frame: keep last good one
+      }
+      try {
+        if (agentCanvas.width !== bmp.width || agentCanvas.height !== bmp.height) {
+          streamStats.resizes++;
+          log(`agent frame size ${bmp.width}x${bmp.height}`);
+          agentCanvas.width = bmp.width; agentCanvas.height = bmp.height;
+          if (source === 'agent') sizeAgentWindow(bmp.width, bmp.height, false);
+        }
+        agentCanvas.getContext('2d').drawImage(bmp, 0, 0);
+        lastFrameAt = performance.now();
+        streamStats.decoded++;
+      } catch (err) {
+        streamStats.drawErrors++;
+        reportEvent('draw-error', { err: String(err && err.message || err) });
+      } finally {
+        if (typeof bmp.close === 'function') bmp.close();
+        agentDecoding = false;
       }
     };
-    agentWS.onerror = () => log(`agent stream !! bridge unreachable (${url})`);
-    agentWS.onclose = () => { agentWS = null; };
+    ws.onerror = () => {
+      streamStats.errors++; streamStats.lastError = 'ws error';
+      log(`agent stream !! bridge unreachable (${url})`);
+      reportEvent('ws-error', { url });
+    };
+    ws.onclose = (ev) => {
+      streamStats.closes++; streamStats.lastCloseCode = ev.code; streamStats.state = 'closed';
+      if (agentWS === ws) agentWS = null;
+      reportEvent('ws-close', { code: ev.code, reason: ev.reason, clean: ev.wasClean, after_rx: streamStats.rx });
+      scheduleAgentRetry(`close ${ev.code}`);
+    };
   } catch (err) {
+    streamStats.lastError = String(err);
     log(`agent stream !! ${err}`);
+    reportEvent('ws-throw', { err: String(err), url });
+    agentWS = null;
+    scheduleAgentRetry('constructor threw');
   }
 }
 
@@ -300,7 +419,11 @@ function dbgSnapshot(note) {
       body: JSON.stringify({ hud: { fps: document.getElementById('m-fps').textContent, straddle: document.getElementById('m-straddle').textContent, owner, source, mode, winX: Math.round(winX), winY: Math.round(winY), membrane: document.getElementById('m-mem').textContent, note: note || '' }, log: (window.__dbg || []).slice(-30), shot: (t.toDataURL('image/jpeg', 0.6).split(',')[1] || '') }) }).catch(() => {});
   } catch { /* recorder never breaks the portal */ }
 }
-window.addEventListener('error', (e) => dbgSnapshot('pageerror: ' + (e.message || 'unknown')));
+window.addEventListener('error', (e) => { reportEvent('pageerror', { msg: e.message || 'unknown', at: `${(e.filename || '').split('/').pop()}:${e.lineno}:${e.colno}` }); dbgSnapshot('pageerror: ' + (e.message || 'unknown')); });
+const _origConsoleError = console.error.bind(console);
+console.error = (...a) => { reportEvent('console-error', { msg: a.map((x) => (x && x.message) || String(x)).join(' ').slice(0, 300) }); _origConsoleError(...a); };
+document.addEventListener('visibilitychange', () => { if (source === 'agent') reportEvent('visibility', { hidden: document.hidden }); });
+window.addEventListener('unhandledrejection', (e) => { reportEvent('unhandled', { msg: String((e.reason && e.reason.message) || e.reason) }); });
 window.addEventListener('unhandledrejection', (e) => dbgSnapshot('unhandled: ' + ((e.reason && e.reason.message) || e.reason)));
 setInterval(() => dbgSnapshot(''), 10000);
 window.addEventListener('mousemove', (ev) => {
